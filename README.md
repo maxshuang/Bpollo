@@ -1,2 +1,2 @@
-![icon](icon.png)
+![icon](assets/icon.png)
 
