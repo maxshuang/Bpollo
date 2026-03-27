@@ -5,7 +5,11 @@
 <h1 align="center">Bpollo</h1>
 
 <p align="center">
-  An AI-native, event-driven business copilot — where an LLM reasoning agent is the orchestrator, not a plugin.
+  <strong>AI-Native Business Copilot</strong>
+</p>
+
+<p align="center">
+  An event-driven business copilot — where an LLM reasoning agent is the orchestrator, not a plugin.
 </p>
 
 ---
