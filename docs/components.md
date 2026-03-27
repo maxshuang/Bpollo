@@ -4,6 +4,79 @@
 
 ---
 
+## Architecture Diagram
+
+```mermaid
+flowchart TD
+    subgraph Sources[Business Event Sources]
+        S1[Inspection]
+        S2[Issue / Action]
+        S3[Investigation]
+        S4[Market / Insurance]
+    end
+
+    subgraph Ingestion[Event Ingestion]
+        EI[Event Ingestion Service]
+        ER[Event Router]
+    end
+
+    subgraph Runtime[Core Runtime]
+        GS[Graph Service]
+        PE[Pattern Engine]
+        WM[Watch Manager]
+        RP[Rule / Policy Engine]
+    end
+
+    subgraph AI[AI Orchestrator - Mastra Agent]
+        PB[Prompt Builder]
+        AG[LLM Reasoning Agent]
+    end
+
+    subgraph Stores[Data Stores]
+        PG[(Postgres)]
+        OS[(OpenSearch)]
+        RD[(Redis)]
+    end
+
+    subgraph Output[Action Layer]
+        AL[Alert Service]
+        API[REST API]
+        WEB[Web UI]
+    end
+
+    S1 --> EI
+    S2 --> EI
+    S3 --> EI
+    S4 --> EI
+
+    EI --> ER
+    ER --> GS
+    ER --> PE
+    ER --> WM
+    ER --> PG
+    ER --> OS
+
+    GS -->|node mapping| PB
+    PE -->|pattern summary| PB
+    WM -->|active watches| PB
+    OS -->|historical evidence| PB
+    RP -->|policy hints| PB
+
+    PB --> AG
+    AG -->|create / update watch| WM
+    AG -->|dispatch alert| AL
+    AG -->|recommendation| API
+
+    WM -->|expiry / match trigger| AG
+    WM --> PG
+    WM --> RD
+
+    AL --> WEB
+    API --> WEB
+```
+
+---
+
 ## Infrastructure
 
 | Component | Tech | MVP |
