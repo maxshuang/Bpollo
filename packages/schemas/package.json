@@ -5,6 +5,7 @@
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "prettier --check src"
   },
@@ -12,6 +13,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
   }
 }

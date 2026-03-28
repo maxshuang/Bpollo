@@ -1,0 +1,25 @@
+{
+  "name": "@bpollo/tests",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:integration": "vitest run integration",
+    "test:e2e":         "vitest run e2e",
+    "test":             "vitest run"
+  },
+  "devDependencies": {
+    "typescript":              "^5.4.0",
+    "tsx":                     "^4.0.0",
+    "@types/node":             "^20.0.0",
+    "vitest":                  "^1.6.0",
+    "testcontainers":          "^10.10.0",
+    "@testcontainers/kafka":   "^10.10.0",
+    "@testcontainers/postgresql": "^10.10.0"
+  },
+  "dependencies": {
+    "kafkajs":  "^2.2.4",
+    "ioredis":  "^5.3.2",
+    "postgres": "^3.4.0"
+  }
+}

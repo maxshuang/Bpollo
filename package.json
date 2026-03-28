@@ -5,14 +5,17 @@
   "workspaces": [
     "services/*",
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "tests"
   ],
   "scripts": {
-    "dev": "turbo run dev",
-    "build": "turbo run build",
-    "test": "turbo run test",
-    "lint": "turbo run lint",
-    "typecheck": "turbo run typecheck"
+    "dev":              "turbo run dev",
+    "build":            "turbo run build",
+    "test":             "turbo run test",
+    "test:integration": "pnpm --filter @bpollo/tests run test:integration",
+    "test:e2e":         "pnpm --filter @bpollo/tests run test:e2e",
+    "lint":             "turbo run lint",
+    "typecheck":        "turbo run typecheck"
   },
   "devDependencies": {
     "turbo": "^2.0.0",
