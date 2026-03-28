@@ -252,6 +252,99 @@ All domain schemas are combined into a single `BpolloEventSchema` discriminated 
 
 ---
 
+## Graph Service Design
+
+The Graph Service is the source of truth for the business flow DAG. It serves two masters simultaneously: the system (programmatic traversal) and the LLM (natural language understanding of the flow).
+
+### Graph Definition Format
+
+The graph is defined as a YAML file — version-controlled in the repo, loaded into memory at startup. Each node and edge carries both machine-readable structure and LLM-readable descriptions.
+
+```yaml
+# services/graph-service/graph-definition.yaml
+
+nodes:
+  inspection.submitted:
+    label: "Inspection Submitted"
+    description: "A field inspector has completed and submitted a site inspection report."
+
+  issue.flagged:
+    label: "Issue Flagged"
+    description: "One or more problems were identified in the inspection that require follow-up action."
+
+  action.created:
+    label: "Corrective Action Created"
+    description: "A task has been created to resolve a flagged issue."
+
+  investigation.opened:
+    label: "Investigation Opened"
+    description: "A formal investigation has been initiated, typically due to severity or repeated issues."
+
+edges:
+  - from: issue.flagged
+    to: action.created
+    label: "Action Required"
+    description: "A flagged issue should result in a corrective action being created."
+    expected: true
+    sla_hours: 24
+    violation_description: "Flagged issue has no corrective action after 24h — historically linked to escalation risk."
+
+  - from: action.created
+    to: investigation.opened
+    label: "Escalated"
+    description: "If the action is insufficient or the issue persists, an investigation is opened."
+    expected: false
+```
+
+Key fields:
+
+| Field | Purpose |
+|---|---|
+| `description` | Injected into LLM prompt to explain business meaning of this node/edge |
+| `violation_description` | Injected when a violation is detected — gives the LLM pre-written business context |
+| `expected` | Tells the Pattern Engine whether absence of this transition is a risk signal |
+| `sla_hours` | Gives the Watch Generator a concrete deadline to monitor |
+
+### What the Graph Service does
+
+1. **Loads** the YAML at startup and builds an in-memory graph
+2. **Maps** each incoming event to its node position (`current_node`, `upstream`, `downstream_expected`)
+3. **Checks** for SLA violations (expected transitions that haven't arrived within `sla_hours`)
+4. **Renders** a natural language context block for the LLM — not the raw YAML, but a readable summary
+
+### How the LLM consumes it
+
+The LLM never reads the raw YAML. The Graph Service renders a context block that the Prompt Builder injects directly into the agent's input:
+
+```
+Current position: issue.flagged
+↳ "One or more problems were identified in the inspection that require follow-up action."
+
+Expected next: action.created (within 24h)
+↳ "A flagged issue should result in a corrective action being created."
+
+Status: MISSING — no action.created seen after 18h
+↳ "Flagged issue has no corrective action after 24h — historically linked to escalation risk."
+```
+
+This gives the LLM natural language business understanding without parsing any structure itself.
+
+### Storage
+
+**MVP:** Single YAML file at `services/graph-service/graph-definition.yaml`, loaded into memory at startup. Graph changes go through PRs — version controlled alongside code.
+
+**Post-MVP:** If tenants need their own graphs or graphs need runtime updates without redeployment, migrate to Postgres as the store with the YAML as the seed/migration format.
+
+### Graph Service API
+
+| Endpoint | Input | Output |
+|---|---|---|
+| `POST /graph/locate` | Normalized event | `{ current_node, upstream, downstream_expected, sla_violations }` |
+| `POST /graph/render-context` | Graph location + violation status | LLM-ready natural language context block |
+| `GET /graph/definition` | — | Full graph for inspection/debugging |
+
+---
+
 ## Critical Files
 
 | File | Why it matters |
