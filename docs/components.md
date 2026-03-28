@@ -7,7 +7,7 @@
 ## Architecture Diagram
 
 ```mermaid
-flowchart TD
+flowchart LR
     subgraph Sources[Business Event Sources]
         S1[Inspection]
         S2[Issue / Action]
@@ -20,23 +20,17 @@ flowchart TD
         ER[Event Router]
     end
 
-    subgraph Foundation[Foundation Layer]
-        GS[Graph Service\nglobal graph + personal graph]
-    end
-
-    subgraph Logic[Business Logic Layer]
-        TE[Trigger Engine\nPatternTrigger / RuleTrigger / CustomTrigger]
-        WM[Watch Manager\n+ Run Queue]
+    subgraph Trigger[Business Logic Layer]
+        TE[Trigger Engine]
     end
 
     subgraph AI[AI Orchestrator - Mastra Agent]
-        AG[LLM Reasoning Agent\nasync run queue consumer]
+        AG[LLM Reasoning Agent]
     end
 
-    subgraph Stores[Data Stores]
-        PG[(Postgres)]
-        OS[(OpenSearch)]
-        RD[(Redis)]
+    subgraph Orchestration[Orchestration Center]
+        WM[Watch Manager]
+        RD[(Run Queue)]
     end
 
     subgraph Output[Action Layer]
@@ -45,32 +39,36 @@ flowchart TD
         WEB[Web UI]
     end
 
+    subgraph Foundation[Foundation Layer]
+        GS[Graph Service]
+        OS[(OpenSearch)]
+        PG[(Postgres)]
+    end
+
     S1 --> EI
     S2 --> EI
     S3 --> EI
     S4 --> EI
-
     EI --> ER
+
     ER --> TE
     ER --> WM
     ER --> PG
     ER --> OS
 
     GS -->|graph context| TE
-    GS -->|expected signals| WM
-
     TE -->|create watch| WM
-    WM -->|push to run queue| RD
+    WM --> RD
 
-    AG -->|pull from run queue| RD
-    AG -->|get rendered context| GS
-    AG -->|get history| OS
+    RD -->|pull| AG
+    GS -->|rendered context| AG
+    OS -->|history| AG
+
     AG -->|update watch| WM
     AG -->|dispatch alert| AL
     AG -->|recommendation| API
 
     WM --> PG
-
     AL --> WEB
     API --> WEB
 ```
@@ -104,7 +102,11 @@ flowchart TD
 | Component | Responsibility | Tech | MVP |
 |---|---|---|---|
 | Trigger Engine | Runs all registered triggers against each incoming event. Each trigger evaluates the event + graph context and returns a `WatchCreationRequest` or null. Any non-null result is handed to the Watch Manager. Ships with `PatternTrigger` and `RuleTrigger` built-in; users add `CustomTrigger` implementations. | TypeScript / Hono, OpenSearch client | Yes |
-| Active Watch Manager | Central coordinator: persists watches, runs time-based expiry checks (absence detection), matches incoming events against active watches, pushes triggered watches onto the run queue. Calls Graph Service to know what signals to watch for. | TypeScript / Hono, node-cron, Postgres, Redis | Yes |
+
+### Orchestration Center
+| Component | Responsibility | Tech | MVP |
+|---|---|---|---|
+| Watch Manager | The orchestration hub between business logic and AI. Persists watches, runs time-based expiry checks (absence detection), matches incoming events against active watches, and pushes triggered watches onto the run queue for async LLM processing. | TypeScript / Hono, node-cron, Postgres, Redis | Yes |
 
 ### AI Layer
 | Component | Responsibility | Tech | MVP |
