@@ -99,7 +99,6 @@ const H_GAP  = 60
 const V_GAP  = 80
 
 function computeLayout(nodes: GraphNode[]): { id: string; x: number; y: number }[] {
-  // BFS from roots to compute depth (layer)
   const inDegree = new Map<string, number>(nodes.map((n) => [n.id, 0]))
   for (const n of nodes) {
     for (const e of n.downstream) {
@@ -107,11 +106,17 @@ function computeLayout(nodes: GraphNode[]): { id: string; x: number; y: number }
     }
   }
 
-  const layers = new Map<string, number>()
-  const queue  = nodes.filter((n) => inDegree.get(n.id) === 0).map((n) => n.id)
-  for (const id of queue) layers.set(id, 0)
-
+  const layers  = new Map<string, number>()
   const nodeMap = new Map(nodes.map((n) => [n.id, n]))
+
+  // Seed BFS with true roots (in-degree 0). For fully-cyclic subgraphs where
+  // no root exists, fall back to the node with the lowest in-degree so every
+  // node still gets a position.
+  const roots = nodes.filter((n) => inDegree.get(n.id) === 0)
+  const seeds = roots.length > 0 ? roots : [nodes.reduce((a, b) => (inDegree.get(a.id)! <= inDegree.get(b.id)! ? a : b))]
+  const queue   = seeds.map((n) => n.id)
+  const visited = new Set<string>(queue)
+  for (const id of queue) layers.set(id, 0)
 
   let head = 0
   while (head < queue.length) {
@@ -122,8 +127,16 @@ function computeLayout(nodes: GraphNode[]): { id: string; x: number; y: number }
       if (!layers.has(e.node) || (layers.get(e.node) ?? 0) < newDepth) {
         layers.set(e.node, newDepth)
       }
-      queue.push(e.node)
+      if (!visited.has(e.node)) {
+        visited.add(e.node)
+        queue.push(e.node)
+      }
     }
+  }
+
+  // Any node still unlayered (disconnected component) gets layer 0
+  for (const n of nodes) {
+    if (!layers.has(n.id)) layers.set(n.id, 0)
   }
 
   // Group by layer

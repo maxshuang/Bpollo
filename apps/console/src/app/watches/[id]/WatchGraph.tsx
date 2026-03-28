@@ -99,15 +99,25 @@ function computeLayout(nodes: BusinessNode[]) {
   }
   const nodeMap = new Map(nodes.map((n) => [n.id, n]))
   const layers  = new Map<string, number>()
-  const queue   = nodes.filter((n) => inDegree.get(n.id) === 0).map((n) => n.id)
+
+  const roots = nodes.filter((n) => inDegree.get(n.id) === 0)
+  const seeds = roots.length > 0 ? roots : [nodes.reduce((a, b) => (inDegree.get(a.id)! <= inDegree.get(b.id)! ? a : b))]
+  const queue   = seeds.map((n) => n.id)
+  const visited = new Set<string>(queue)
   for (const id of queue) layers.set(id, 0)
+
   let head = 0
   while (head < queue.length) {
     const id = queue[head++]
     for (const e of nodeMap.get(id)?.downstream ?? []) {
       const d = (layers.get(id) ?? 0) + 1
-      if (!layers.has(e.node) || (layers.get(e.node) ?? 0) < d) { layers.set(e.node, d); queue.push(e.node) }
+      if (!layers.has(e.node) || (layers.get(e.node) ?? 0) < d) layers.set(e.node, d)
+      if (!visited.has(e.node)) { visited.add(e.node); queue.push(e.node) }
     }
+  }
+
+  for (const n of nodes) {
+    if (!layers.has(n.id)) layers.set(n.id, 0)
   }
   const byLayer = new Map<number, string[]>()
   for (const [id, l] of layers) { const a = byLayer.get(l) ?? []; a.push(id); byLayer.set(l, a) }
