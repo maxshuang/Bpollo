@@ -24,15 +24,14 @@ flowchart TD
         GS[Graph Service\nglobal graph + personal graph]
     end
 
-    subgraph Runtime[Business Logic Layer]
+    subgraph Logic[Business Logic Layer]
         PE[Pattern Engine]
-        WM[Watch Manager]
         RP[Rule / Policy Engine]
+        WM[Watch Manager\n+ Run Queue]
     end
 
     subgraph AI[AI Orchestrator - Mastra Agent]
-        PB[Prompt Builder]
-        AG[LLM Reasoning Agent]
+        AG[LLM Reasoning Agent\nasync run queue consumer]
     end
 
     subgraph Stores[Data Stores]
@@ -54,28 +53,27 @@ flowchart TD
 
     EI --> ER
     ER --> PE
+    ER --> RP
     ER --> WM
     ER --> PG
     ER --> OS
 
     GS -->|graph context| PE
-    GS -->|expected signals| WM
     GS -->|graph rules| RP
-    GS -->|rendered context block| PB
+    GS -->|expected signals| WM
 
-    PE -->|pattern summary| PB
-    WM -->|active watches| PB
-    RP -->|policy hints| PB
-    OS -->|historical evidence| PB
+    PE -->|create watch| WM
+    RP -->|create watch| WM
+    WM -->|push to run queue| RD
 
-    PB --> AG
-    AG -->|create / update watch| WM
+    AG -->|pull from run queue| RD
+    AG -->|get rendered context| GS
+    AG -->|get history| OS
+    AG -->|update watch| WM
     AG -->|dispatch alert| AL
     AG -->|recommendation| API
 
-    WM -->|expiry / match trigger| AG
     WM --> PG
-    WM --> RD
 
     AL --> WEB
     API --> WEB
@@ -183,38 +181,60 @@ flowchart TD
 
 ## Event Processing Paths
 
-When an event enters the system, it falls into one of four paths. The triage happens in priority order — an event can match multiple paths simultaneously, in which case all signals are combined into the LLM context.
+Events are processed **synchronously** by the business logic layer, and the LLM is invoked **asynchronously** via the run queue. The two phases are fully decoupled.
+
+### Phase 1 — Synchronous Event Processing (no LLM)
 
 ```
 Incoming Event
       │
-      ▼
-Does it match an active watch?
-  ├─ Yes → Path 4: Watch Match       (LLM re-reasons with watch context)
-  └─ No  ↓
-Does a deterministic rule fire?
-  ├─ Yes → Path 3: Policy Violation  (LLM invoked for explanation only)
-  └─ No  ↓
-Does the Pattern Engine flag it?
-  ├─ Yes → Path 2: Flagged           (LLM invoked to decide watch vs. direct recommendation)
-  └─ No  ↓
-         Path 1: Normal              (no LLM invoked — store and move on)
+      ▼ (fan-out in parallel)
+  ┌───┴──────────────┬──────────────────┐
+  ▼                  ▼                  ▼
+Watch Manager    Pattern Engine    Rule Engine
+(match check)    (anomaly check)   (rule check)
+  │                  │                  │
+  ▼                  ▼                  ▼
+match found?     anomaly found?    rule fires?
+  │                  │                  │
+  └──────────────────┴──────────────────┘
+           ↓ any triggered?
+    Create / update watch in Watch Manager
+           ↓
+    Push to run queue
 ```
 
-### Path 1 — Normal Operation
-Event is in the expected position in the business flow. No rules fire, no anomaly detected, no watch match. The event is persisted and acknowledged. **LLM is not invoked.** This should be the majority of traffic.
+- **Watch match** — Watch Manager finds an active watch for this entity. Updates watch state, pushes to run queue.
+- **Pattern Engine flags** — anomaly detected (missing action, recurrence, unusual gap). Creates a new watch in Watch Manager, which pushes to run queue.
+- **Rule fires** — deterministic rule violation (e.g. critical issue + no action in 1h). Creates a new watch in Watch Manager, which pushes to run queue.
+- **Nothing triggers** — event is stored and acknowledged. **Run queue is not touched.**
 
-### Path 2 — Flagged / Worth Investigating
-Something is off but not a clear violation — a missing downstream action, a weak anomaly signal, an unusual gap. The LLM is invoked to weigh historical evidence and decide: create a watch, issue a direct recommendation, or stand down.
+### Phase 2 — Async LLM Reasoning (run queue consumer)
 
-### Path 3 — Pattern Violation
-A deterministic rule fires (e.g. critical issue + no action within 1h). The watch is created by the policy engine directly — **the LLM does not decide whether to act**. The LLM is still invoked to generate the risk explanation and recommendation text.
+```
+Run Queue (Kafka: bpollo.watches.triggered)
+      │
+      ▼
+LLM Orchestrator pulls { watch_id, trigger_type, triggering_event }
+      │
+      ▼ (parallel calls)
+  ┌───┴──────────────────┬──────────────────┐
+  ▼                      ▼                  ▼
+Graph Service        Watch Manager      OpenSearch
+(rendered context)   (active watches)   (history)
+  └──────────────────────┴──────────────────┘
+           ↓
+    LLM reasons over full context
+           ↓
+    Decision: resolve | escalate | spawn | extend | alert_only | expire
+           ↓
+    Update watch (Watch Manager) + dispatch alert (Alert Service) if needed
+```
 
-### Path 4 — Watch Match
-The Watch Manager intercepts the event first. It routes to the LLM with full watch context: what was being monitored, what was expected, and what just arrived. The LLM decides: resolve the watch, escalate it, or keep monitoring. This path takes priority over all others.
+The LLM is **never on the synchronous event path**. Event processing latency is fully decoupled from LLM latency. The run queue acts as the buffer.
 
 ### Stacking
-An event can trigger multiple paths simultaneously — e.g. it matches an active watch (Path 4) *and* fires a new policy rule (Path 3). In this case both signals are passed to the LLM context assembler together. The LLM reasons over the combined picture.
+An event can trigger multiple watches simultaneously. Each triggered watch becomes an independent run queue item. The LLM processes them separately, each with its own context.
 
 ---
 
@@ -534,10 +554,11 @@ Services communicate via two patterns depending on the moment in the pipeline. A
 | Moment | Pattern | Why |
 |---|---|---|
 | Event fan-out (ingestion → downstream) | Kafka async | Decoupled, replayable, independent consumers |
-| Business logic queries Graph Service | HTTP sync | Foundation layer queried on-demand by consumers |
-| LLM context assembly | Parallel HTTP sync | Need all inputs before LLM call |
-| Watch triggers → LLM Orchestrator | Kafka async | Prioritized queue, resilient to LLM latency |
-| LLM decisions → Watch Manager / Alert | HTTP sync | LLM needs confirmation before returning |
+| Business logic → Graph Service | HTTP sync | Foundation layer queried on-demand |
+| Pattern Engine / Rule Engine → Watch Manager | HTTP sync | Create watch, need confirmation |
+| Watch Manager → LLM Orchestrator | Kafka async | Run queue — decouples event latency from LLM latency |
+| LLM Orchestrator → Graph Service / OpenSearch | Parallel HTTP sync | Assemble full context before reasoning |
+| LLM Orchestrator → Watch Manager / Alert | HTTP sync | LLM needs confirmation of decision |
 
 ### Kafka Topics
 
@@ -546,6 +567,7 @@ Services communicate via two patterns depending on the moment in the pipeline. A
 | `bpollo.events.raw` | Event Ingestion | Event Router | `entity_id` |
 | `bpollo.events.pattern` | Event Router | Pattern Engine | `entity_id` |
 | `bpollo.events.watch` | Event Router | Watch Manager | `entity_id` |
+| `bpollo.events.rules` | Event Router | Rule Engine | `entity_id` |
 | `bpollo.watches.triggered` | Watch Manager | LLM Orchestrator | `entity_id` |
 
 ### Graph Service API
@@ -585,16 +607,6 @@ PATCH  /watches/:id
 GET    /watches
   Query: entity_id, tenant_id, status?
   Reply: { watches: WatchObject[] }
-```
-
-### LLM Orchestrator API
-Called by the Event Router for Path 2 / Path 3 events (flagged or policy violation).
-
-```
-POST /reason
-  Body:  { event: BpolloEvent, graph_location: GraphLocation,
-           pattern_summary: PatternSummary, active_watches: WatchObject[] }
-  Reply: { decision: LLMDecision }
 ```
 
 ### Alert Service API
