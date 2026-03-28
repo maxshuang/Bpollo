@@ -5,6 +5,12 @@
 <h1 align="center">Bpollo</h1>
 
 <p align="center">
+  <a href="https://github.com/maxshuang/Bpollo/actions/workflows/ci.yml">
+    <img src="https://github.com/maxshuang/Bpollo/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+</p>
+
+<p align="center">
   <strong>AI-Native Business Copilot</strong>
 </p>
 
