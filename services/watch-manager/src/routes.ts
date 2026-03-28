@@ -147,7 +147,9 @@ export function buildRouter() {
       );
     }
 
-    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    const updates: Partial<typeof watchObjects.$inferInsert> = {
+      updatedAt: new Date(),
+    };
     if (parsed.data.status) updates.status = parsed.data.status;
     if (parsed.data.expected_signals)
       updates.expectedSignals = parsed.data.expected_signals;
@@ -156,7 +158,7 @@ export function buildRouter() {
 
     const [row] = await db
       .update(watchObjects)
-      .set(updates as Parameters<typeof db.update>[0])
+      .set(updates)
       .where(eq(watchObjects.watchId, id))
       .returning();
 
