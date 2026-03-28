@@ -25,8 +25,7 @@ flowchart TD
     end
 
     subgraph Logic[Business Logic Layer]
-        PE[Pattern Engine]
-        RP[Rule / Policy Engine]
+        TE[Trigger Engine\nPatternTrigger / RuleTrigger / CustomTrigger]
         WM[Watch Manager\n+ Run Queue]
     end
 
@@ -52,18 +51,15 @@ flowchart TD
     S4 --> EI
 
     EI --> ER
-    ER --> PE
-    ER --> RP
+    ER --> TE
     ER --> WM
     ER --> PG
     ER --> OS
 
-    GS -->|graph context| PE
-    GS -->|graph rules| RP
+    GS -->|graph context| TE
     GS -->|expected signals| WM
 
-    PE -->|create watch| WM
-    RP -->|create watch| WM
+    TE -->|create watch| WM
     WM -->|push to run queue| RD
 
     AG -->|pull from run queue| RD
@@ -107,10 +103,8 @@ flowchart TD
 ### Business Logic Layer
 | Component | Responsibility | Tech | MVP |
 |---|---|---|---|
-| Pattern / Insight Engine | Detects missing actions, recurrence, anomalies by querying event history. Calls Graph Service to understand expected transitions before analyzing. | TypeScript / Hono, OpenSearch client | Yes (2–3 checks) |
-| Active Watch Manager | Persists watches, runs time-based expiry checks, matches future events against active watches, triggers re-reasoning on match. Calls Graph Service to know what signals to watch for. | TypeScript / Hono, node-cron, Postgres, Redis | Yes |
-| Rule / Policy Engine | Deterministic rules evaluated before LLM to short-circuit clear-cut cases. Calls Graph Service for graph-based rule evaluation (e.g. "critical node with no downstream"). | TypeScript module, YAML-defined rules | Yes |
-| Watch Graph Generator | Builds `WatchObject` from LLM + policy output; co-located with Watch Manager | TypeScript module | Yes |
+| Trigger Engine | Runs all registered triggers against each incoming event. Each trigger evaluates the event + graph context and returns a `WatchCreationRequest` or null. Any non-null result is handed to the Watch Manager. Ships with `PatternTrigger` and `RuleTrigger` built-in; users add `CustomTrigger` implementations. | TypeScript / Hono, OpenSearch client | Yes |
+| Active Watch Manager | Central coordinator: persists watches, runs time-based expiry checks (absence detection), matches incoming events against active watches, pushes triggered watches onto the run queue. Calls Graph Service to know what signals to watch for. | TypeScript / Hono, node-cron, Postgres, Redis | Yes |
 
 ### AI Layer
 | Component | Responsibility | Tech | MVP |
@@ -189,15 +183,16 @@ Events are processed **synchronously** by the business logic layer, and the LLM 
 Incoming Event
       │
       ▼ (fan-out in parallel)
-  ┌───┴──────────────┬──────────────────┐
-  ▼                  ▼                  ▼
-Watch Manager    Pattern Engine    Rule Engine
-(match check)    (anomaly check)   (rule check)
-  │                  │                  │
-  ▼                  ▼                  ▼
-match found?     anomaly found?    rule fires?
-  │                  │                  │
-  └──────────────────┴──────────────────┘
+  ┌───────────────────┬──────────────────┐
+  ▼                   ▼                  ▼
+Watch Manager    Trigger Engine      Persist
+(match check)    (evaluate all       (Postgres
+                  triggers)           + OpenSearch)
+  │                   │
+  ▼                   ▼
+match found?     trigger fires?
+  │                   │
+  └───────────────────┘
            ↓ any triggered?
     Create / update watch in Watch Manager
            ↓
@@ -205,8 +200,7 @@ match found?     anomaly found?    rule fires?
 ```
 
 - **Watch match** — Watch Manager finds an active watch for this entity. Updates watch state, pushes to run queue.
-- **Pattern Engine flags** — anomaly detected (missing action, recurrence, unusual gap). Creates a new watch in Watch Manager, which pushes to run queue.
-- **Rule fires** — deterministic rule violation (e.g. critical issue + no action in 1h). Creates a new watch in Watch Manager, which pushes to run queue.
+- **Trigger fires** — a registered trigger (PatternTrigger, RuleTrigger, or CustomTrigger) returns a `WatchCreationRequest`. Trigger Engine calls Watch Manager to create the watch, which pushes to run queue.
 - **Nothing triggers** — event is stored and acknowledged. **Run queue is not touched.**
 
 ### Phase 2 — Async LLM Reasoning (run queue consumer)
@@ -565,9 +559,8 @@ Services communicate via two patterns depending on the moment in the pipeline. A
 | Topic | Producer | Consumer | Partition Key |
 |---|---|---|---|
 | `bpollo.events.raw` | Event Ingestion | Event Router | `entity_id` |
-| `bpollo.events.pattern` | Event Router | Pattern Engine | `entity_id` |
+| `bpollo.events.triggers` | Event Router | Trigger Engine | `entity_id` |
 | `bpollo.events.watch` | Event Router | Watch Manager | `entity_id` |
-| `bpollo.events.rules` | Event Router | Rule Engine | `entity_id` |
 | `bpollo.watches.triggered` | Watch Manager | LLM Orchestrator | `entity_id` |
 
 ### Graph Service API
@@ -586,12 +579,29 @@ GET  /graph/definition
   Reply: full graph as JSON
 ```
 
-### Pattern Engine API
+### Trigger Engine API
 ```
-POST /patterns/analyze
+POST /triggers/evaluate
   Body:  { event: BpolloEvent, graph_location: GraphLocation }
-  Reply: { should_flag: boolean, signals: PatternSignal[], pattern_type?: string }
+  Reply: { fired: TriggerResult[] }
+  // TriggerResult: { trigger_name, watch_creation_request: WatchCreationRequest | null }
 ```
+
+**Abstract Trigger Interface** (implemented by built-ins and custom triggers):
+```typescript
+interface Trigger {
+  name: string
+  evaluate(
+    event: BpolloEvent,
+    graphLocation: GraphLocation
+  ): Promise<WatchCreationRequest | null>
+}
+```
+
+Built-in implementations:
+- `PatternTrigger` — fires based on historical patterns (recurrence, missing action, anomaly)
+- `RuleTrigger` — fires based on deterministic conditions (severity + SLA breach)
+- `CustomTrigger` — user-defined; implement the interface and register
 
 ### Watch Manager API
 ```
@@ -647,7 +657,7 @@ POST /copilot/query
 |---|---|---|
 | `BaseEvent`, `BpolloEvent` | `event.ts` | All services |
 | `GraphLocation`, `SLAViolation` | `graph.ts` | Graph Service, Pattern Engine, LLM Orchestrator |
-| `PatternSignal`, `PatternSummary` | `pattern.ts` | Pattern Engine, LLM Orchestrator |
+| `TriggerResult`, `WatchCreationRequest` | `trigger.ts` | Trigger Engine, Watch Manager, LLM Orchestrator |
 | `WatchObject`, `WatchTrigger`, `TriggerCondition`, `ExpectedSignal` | `watch.ts` | Watch Manager, LLM Orchestrator, Alert Service, API |
 | `LLMDecision` | `decision.ts` | LLM Orchestrator, Watch Manager |
 | `Alert` | `alert.ts` | Alert Service, API, Web UI |

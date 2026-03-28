@@ -9,7 +9,7 @@ Bpollo/
 │   ├── event-ingestion/             # Receives webhooks, normalizes & deduplicates events, publishes to Kafka
 │   ├── event-router/                # Consumes normalized events, fans out to typed Kafka topics
 │   ├── graph-service/               # Business flow graph: maps events to DAG node positions
-│   ├── pattern-engine/              # Detects missing actions, recurrence, anomalies via OpenSearch
+│   ├── trigger-engine/              # Runs registered triggers (PatternTrigger, RuleTrigger, CustomTrigger) against events
 │   ├── watch-manager/               # Persists watches, schedules expiry checks, matches future events
 │   ├── llm-orchestrator/            # Mastra agent: assembles context, reasons, dispatches watch/alert
 │   ├── alert-service/               # Routes structured alerts to Slack and in-app notifications
@@ -63,7 +63,7 @@ apps/web  →  services/api  →  services/watch-manager
 services/event-ingestion  →  [Kafka]  →  services/event-router
                                               ↓
                                  services/graph-service
-                                 services/pattern-engine
+                                 services/trigger-engine
                                  services/watch-manager
 ```
 
