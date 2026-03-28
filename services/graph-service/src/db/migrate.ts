@@ -3,8 +3,8 @@
  * For production, use drizzle-kit migrate with proper migration files.
  * This inline approach is fine for MVP.
  */
-import { db } from "./client.js"
-import { sql } from "drizzle-orm"
+import { db } from "./client.js";
+import { sql } from "drizzle-orm";
 
 export async function runMigrations() {
   await db.execute(sql`
@@ -16,7 +16,7 @@ export async function runMigrations() {
       updated_at   TIMESTAMPTZ NOT NULL,
       PRIMARY KEY (entity_id, tenant_id)
     )
-  `)
+  `);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS entity_history (
@@ -29,10 +29,10 @@ export async function runMigrations() {
       event_type  TEXT        NOT NULL,
       occurred_at TIMESTAMPTZ NOT NULL
     )
-  `)
+  `);
 
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS idx_entity_history_entity
       ON entity_history (entity_id, tenant_id, occurred_at DESC)
-  `)
+  `);
 }

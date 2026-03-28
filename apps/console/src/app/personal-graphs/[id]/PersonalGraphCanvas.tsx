@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import {
   ReactFlow,
   Background,
@@ -125,7 +125,7 @@ export default function PersonalGraphCanvas({ graph }: { graph: PersonalGraph })
 
   const positions = computeLayout(graph.nodes, graph.edges)
   const posMap    = new Map(positions.map((p) => [p.id, p]))
-  const nodeMap   = new Map(graph.nodes.map((n) => [n.id, n]))
+  const nodeMap   = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph.nodes])
 
   const initialNodes: Node[] = graph.nodes.map((n) => ({
     id:       n.id,

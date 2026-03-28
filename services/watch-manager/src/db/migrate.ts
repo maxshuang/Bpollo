@@ -1,5 +1,5 @@
-import { db } from "./client.js"
-import { sql } from "drizzle-orm"
+import { db } from "./client.js";
+import { sql } from "drizzle-orm";
 
 export async function runMigrations() {
   await db.execute(sql`
@@ -20,15 +20,15 @@ export async function runMigrations() {
       triggered_at        TIMESTAMPTZ,
       updated_at          TIMESTAMPTZ NOT NULL
     )
-  `)
+  `);
 
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS idx_watch_entity
       ON watch_objects (entity_id, tenant_id)
-  `)
+  `);
 
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS idx_watch_status
       ON watch_objects (status, expires_at)
-  `)
+  `);
 }

@@ -1,5 +1,5 @@
-import { db } from "./client.js"
-import { sql } from "drizzle-orm"
+import { db } from "./client.js";
+import { sql } from "drizzle-orm";
 
 export async function runMigrations() {
   await db.execute(sql`
@@ -14,15 +14,15 @@ export async function runMigrations() {
       read            BOOLEAN     NOT NULL DEFAULT false,
       created_at      TIMESTAMPTZ NOT NULL
     )
-  `)
+  `);
 
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS idx_alerts_tenant
       ON alerts (tenant_id, created_at DESC)
-  `)
+  `);
 
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS idx_alerts_entity
       ON alerts (entity_id, tenant_id, created_at DESC)
-  `)
+  `);
 }

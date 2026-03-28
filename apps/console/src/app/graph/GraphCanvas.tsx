@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import {
   ReactFlow,
   Background,
@@ -202,7 +202,7 @@ export default function GraphCanvas({ graphNodes, graphName, version }: Props) {
   const [nodes, , onNodesChange] = useNodesState(initialNodes)
   const [edges, , onEdgesChange] = useEdgesState(initialEdges)
 
-  const nodeMap = new Map(graphNodes.map((n) => [n.id, n]))
+  const nodeMap = useMemo(() => new Map(graphNodes.map((n) => [n.id, n])), [graphNodes])
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
