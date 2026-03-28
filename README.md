@@ -52,7 +52,7 @@ Bpollo is domain-agnostic: any business process expressible as a flow graph can 
 | `watch-manager` | ✅ done | CRUD for watches, Redis event index, Kafka-driven triggering |
 | `alert-service` | ✅ done | Alert storage and read/unread lifecycle |
 | `console` | ✅ done | Internal dashboard — business graph, personal graphs, watch inspector |
-| `trigger-engine` | 🔧 planned | Pattern matching on event sequences |
+| `trigger-engine` | ✅ done | Trigger interface + RuleTrigger + PatternTrigger → creates watches via Watch Manager |
 | `llm-orchestrator` | 🔧 planned | Mastra-based agent — assembles context, reasons, decides |
 
 **174 tests** — unit, integration (real Docker containers), and E2E across the full event pipeline.
