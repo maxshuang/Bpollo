@@ -1,0 +1,95 @@
+version: "1.0"
+name: "Business Process Graph"
+
+# Each node maps to an event_type from the canonical event schema.
+# Both description (machine-readable) and llm_description (LLM prompt context) are required.
+# downstream lists the expected next nodes and their SLA windows.
+
+nodes:
+  - id: inspection_submitted
+    label: Inspection Submitted
+    event_type: inspection.submitted
+    description: "An inspection report has been submitted and is pending review."
+    llm_description: "A workplace inspection has been completed and formally submitted. The inspector documented all findings. The report is now awaiting classification and action assignment."
+    sla_hours: 24
+    downstream:
+      - node: issue_flagged
+        label: Issue Flagged
+        sla_hours: 48
+      - node: inspection_closed
+        label: Inspection Closed (no issues)
+        sla_hours: 72
+
+  - id: issue_flagged
+    label: Issue Flagged
+    event_type: inspection.issue_flagged
+    description: "One or more issues were flagged during inspection review."
+    llm_description: "During review of the inspection report, specific issues were identified and flagged for corrective action. Each flagged issue typically triggers one or more action items assigned to responsible parties."
+    sla_hours: 48
+    downstream:
+      - node: action_created
+        label: Action Created
+        sla_hours: 24
+
+  - id: action_created
+    label: Action Created
+    event_type: action.created
+    description: "A corrective action has been created and assigned."
+    llm_description: "A corrective action item has been created in response to a flagged issue. It has been assigned to a responsible person with a due date. The clock is now running on resolution."
+    sla_hours: 72
+    downstream:
+      - node: action_resolved
+        label: Action Resolved
+        sla_hours: 72
+      - node: action_overdue
+        label: Action Overdue
+        sla_hours: 72
+
+  - id: action_overdue
+    label: Action Overdue
+    event_type: action.overdue
+    description: "A corrective action has passed its due date without resolution."
+    llm_description: "A corrective action was not resolved within its deadline. This is an escalation signal — the entity is now in a high-risk state. Historical overdue actions on the same entity increase the urgency of any active watches."
+    sla_hours: 24
+    downstream:
+      - node: action_resolved
+        label: Action Resolved (late)
+        sla_hours: 48
+
+  - id: action_resolved
+    label: Action Resolved
+    event_type: action.resolved
+    description: "A corrective action has been marked resolved."
+    llm_description: "The corrective action has been completed and marked resolved by the assignee. Resolution should be verified — check whether all linked issues are also resolved and whether the inspection can be closed."
+    sla_hours: null
+    downstream:
+      - node: inspection_closed
+        label: Inspection Closed
+        sla_hours: 72
+
+  - id: investigation_opened
+    label: Investigation Opened
+    event_type: investigation.opened
+    description: "A formal investigation has been opened for this entity."
+    llm_description: "A formal investigation has been initiated. This is a high-severity state — the entity is under active scrutiny. All related actions and inspections should be treated as time-sensitive."
+    sla_hours: 48
+    downstream:
+      - node: investigation_closed
+        label: Investigation Closed
+        sla_hours: 168
+
+  - id: investigation_closed
+    label: Investigation Closed
+    event_type: investigation.closed
+    description: "The investigation has been formally closed."
+    llm_description: "The investigation has concluded. Review the outcome — whether findings were upheld, dismissed, or referred — to determine if further action is warranted."
+    sla_hours: null
+    downstream: []
+
+  - id: inspection_closed
+    label: Inspection Closed
+    event_type: null
+    description: "The inspection lifecycle is complete."
+    llm_description: "The inspection and all associated actions have been resolved. The entity has returned to a baseline state."
+    sla_hours: null
+    downstream: []
