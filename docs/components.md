@@ -412,6 +412,102 @@ This gives the LLM natural language business understanding without parsing any s
 
 ---
 
+## Watch Object & Watch Mechanism
+
+The watch system is the async engine of Bpollo — modeled after OS process scheduling. Watches sleep in a wait queue, incoming events act as interrupts that wake matching watches, and the LLM agent is the CPU that processes the run queue.
+
+| OS Concept | Bpollo Equivalent |
+|---|---|
+| Sleeping process | Watch in `waiting` state |
+| Wait queue | Active watch list |
+| Interrupt / signal | Incoming business event |
+| Waking a process | Event matches a watch → `triggered` |
+| Run queue | Queue of triggered watches ready for LLM |
+| CPU / scheduler | LLM agent core |
+| Timer interrupt | SLA expiry — watch wakes even with no event |
+| Process fork | Watch spawns a child watch |
+| Process exit | Watch resolved or expired |
+
+### Watch Object Schema
+
+```
+watch_id            — unique ID
+entity_id           — business entity being monitored
+tenant_id           — multi-tenancy isolation
+status              — waiting | triggered | running | resolved | escalated | expired
+risk_level          — low | medium | high | critical
+
+# Why this watch exists (LLM continuity)
+reason              — LLM-generated explanation of why this watch was created
+graph_snapshot      — business flow position + personal graph context at creation time
+
+# What will wake this watch (interrupt vectors)
+trigger_conditions:
+  - type: event_match   — wake when specific event_type arrives for this entity
+  - type: absence       — wake when expected event has NOT arrived by deadline
+  - type: pattern       — wake when a pattern fires across multiple events
+
+# What we're waiting for
+expected_signals:
+  - event_type: action.created
+    deadline: 2026-03-29T10:00:00Z
+    required: true
+  - event_type: issue.resolved
+    deadline: 2026-04-03T10:00:00Z
+    required: false
+
+# Lifecycle
+created_at          — when watch was created
+expires_at          — hard TTL, watch dies regardless if not resolved
+triggered_at        — when last woken
+history             — log of all events matched against this watch
+```
+
+### The Mechanism
+
+**Event-driven wake:**
+```
+Incoming event
+  → Watch Manager queries: active watches WHERE entity_id matches AND trigger_conditions match
+  → Matched watches: status waiting → triggered
+  → Push { watch_id, event } onto run queue
+  → LLM agent consumes, reasons over (watch context + current event)
+  → Returns structured decision
+```
+
+**Timer interrupt (absence detection):**
+```
+node-cron ticks every N minutes
+  → Scan watches WHERE expected_signal.deadline < now AND signal not yet received
+  → Wake those watches with a synthetic "absence" event
+  → Same run queue → LLM reasons: "expected action.created 2h ago — nothing arrived"
+```
+
+**LLM decisions (structured output):**
+
+| Decision | Effect |
+|---|---|
+| `resolve` | All expected signals arrived — close the watch |
+| `escalate` | Situation worsened — create higher-priority watch + alert |
+| `spawn` | Create a child watch for the next monitoring phase |
+| `extend` | Push the deadline, keep watching |
+| `alert_only` | Surface a recommendation without changing watch state |
+| `expire` | Nothing happened within TTL — close quietly |
+
+### Key Design Principle
+
+The watch carries the LLM's reasoning context from when it was created (`reason` + `graph_snapshot` + `history`). When it wakes, the agent gets the original context plus the new event — it continues reasoning from where it left off, not from scratch. This is what makes the proactive behavior feel intelligent rather than rule-based.
+
+### Implementation Notes
+
+- **Storage:** Postgres `watches` table, indexed on `(entity_id, status, tenant_id)`
+- **Run queue:** Kafka topic `bpollo.watches.triggered` or Redis queue, ordered by `risk_level`
+- **Scheduler:** `node-cron` inside the Watch Manager service, tick interval configurable
+- **Concurrency:** Row-level locking in Postgres prevents duplicate processing of the same watch
+- **Scale risks (post-MVP):** High event throughput with many active watches needs index tuning; simultaneous triggers need priority scheduling in the run queue
+
+---
+
 ## Critical Files
 
 | File | Why it matters |
