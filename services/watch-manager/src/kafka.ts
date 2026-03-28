@@ -9,6 +9,31 @@ const kafka = new Kafka({
   brokers: config.kafkaBrokers,
 });
 const consumer = kafka.consumer({ groupId: config.consumerGroup });
+const producer = kafka.producer();
+
+export async function startProducer(): Promise<void> {
+  await producer.connect();
+}
+
+export async function publishTriggered(
+  watchId: string,
+  entityId: string,
+  triggerType: "event_match" | "absence",
+): Promise<void> {
+  await producer.send({
+    topic: config.kafkaTriggeredTopic,
+    messages: [
+      {
+        key: entityId,
+        value: JSON.stringify({
+          watch_id: watchId,
+          trigger_type: triggerType,
+          entity_id: entityId,
+        }),
+      },
+    ],
+  });
+}
 
 export async function startConsumer(): Promise<void> {
   await consumer.connect();
@@ -48,4 +73,5 @@ export async function startConsumer(): Promise<void> {
 
 export async function disconnectConsumer(): Promise<void> {
   await consumer.disconnect();
+  await producer.disconnect();
 }

@@ -4,7 +4,8 @@ import { config } from "./config.js";
 import { logger } from "./logger.js";
 import { runMigrations } from "./db/migrate.js";
 import { redis } from "./redis.js";
-import { startConsumer, disconnectConsumer } from "./kafka.js";
+import { startProducer, startConsumer, disconnectConsumer } from "./kafka.js";
+import { startScheduler, stopScheduler } from "./scheduler.js";
 import { buildRouter } from "./routes.js";
 
 async function main() {
@@ -21,11 +22,17 @@ async function main() {
     logger.info({ port: config.port }, "watch-manager listening");
   });
 
+  await startProducer();
+  logger.info("kafka producer started");
+
   await startConsumer();
   logger.info("kafka consumer started");
 
+  startScheduler();
+
   const shutdown = async () => {
     logger.info("shutting down");
+    stopScheduler();
     await disconnectConsumer();
     redis.disconnect();
     server.close();
