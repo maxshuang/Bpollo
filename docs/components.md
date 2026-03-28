@@ -162,6 +162,96 @@ flowchart TD
 
 ---
 
+## Event Processing Paths
+
+When an event enters the system, it falls into one of four paths. The triage happens in priority order — an event can match multiple paths simultaneously, in which case all signals are combined into the LLM context.
+
+```
+Incoming Event
+      │
+      ▼
+Does it match an active watch?
+  ├─ Yes → Path 4: Watch Match       (LLM re-reasons with watch context)
+  └─ No  ↓
+Does a deterministic rule fire?
+  ├─ Yes → Path 3: Policy Violation  (LLM invoked for explanation only)
+  └─ No  ↓
+Does the Pattern Engine flag it?
+  ├─ Yes → Path 2: Flagged           (LLM invoked to decide watch vs. direct recommendation)
+  └─ No  ↓
+         Path 1: Normal              (no LLM invoked — store and move on)
+```
+
+### Path 1 — Normal Operation
+Event is in the expected position in the business flow. No rules fire, no anomaly detected, no watch match. The event is persisted and acknowledged. **LLM is not invoked.** This should be the majority of traffic.
+
+### Path 2 — Flagged / Worth Investigating
+Something is off but not a clear violation — a missing downstream action, a weak anomaly signal, an unusual gap. The LLM is invoked to weigh historical evidence and decide: create a watch, issue a direct recommendation, or stand down.
+
+### Path 3 — Pattern Violation
+A deterministic rule fires (e.g. critical issue + no action within 1h). The watch is created by the policy engine directly — **the LLM does not decide whether to act**. The LLM is still invoked to generate the risk explanation and recommendation text.
+
+### Path 4 — Watch Match
+The Watch Manager intercepts the event first. It routes to the LLM with full watch context: what was being monitored, what was expected, and what just arrived. The LLM decides: resolve the watch, escalate it, or keep monitoring. This path takes priority over all others.
+
+### Stacking
+An event can trigger multiple paths simultaneously — e.g. it matches an active watch (Path 4) *and* fires a new policy rule (Path 3). In this case both signals are passed to the LLM context assembler together. The LLM reasons over the combined picture.
+
+---
+
+## Event Schema Design
+
+Business events are diverse — an inspection event looks nothing like an insurance claim. Bpollo uses a **base event + domain extension** pattern via Zod discriminated unions, living in `packages/schemas`.
+
+### Base Event
+
+Fields every service needs, regardless of event type:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `event_id` | `uuid` | Dedup and tracing |
+| `event_type` | `string` | Discriminator for routing and graph mapping |
+| `entity_id` | `string` | Primary business entity this event relates to |
+| `tenant_id` | `string` | Multi-tenancy isolation |
+| `source_system` | `string` | Which upstream system emitted this |
+| `timestamp` | `datetime` | ISO 8601 UTC |
+| `correlation_id` | `uuid?` | Links a chain of related events |
+
+`site_id` and all other domain-specific fields are **not** on the base — they live only on domain events that need them.
+
+### Domain Events
+
+Each event type extends the base with a `z.literal()` on `event_type` and its own typed fields:
+
+```
+BaseEventSchema
+  ├── inspection.issue_flagged  { site_id, issue_type, severity }
+  ├── action.created            { action_id, assigned_to?, due_date? }
+  ├── action.overdue            { action_id, overdue_by_hours }
+  ├── investigation.opened      { investigation_id, linked_issue_ids }
+  └── ...
+```
+
+All domain schemas are combined into a single `BpolloEventSchema` discriminated union. **Unknown event types are rejected at the ingestion boundary** — no catch-all fallback.
+
+### How services use it
+
+| Service | What it reads |
+|---|---|
+| Event Router | `BaseEvent` (`event_type` only) |
+| Graph Service | `BaseEvent` (`event_type` + `entity_id`) |
+| Pattern Engine | Full narrowed domain type |
+| LLM Orchestrator | Full `BpolloEvent` |
+| Event Ingestion | Calls `BpolloEventSchema.parse()` — the only validation boundary |
+
+### What is NOT in the event
+
+- Business graph position (`business_node`, `upstream`, `downstream_expected`) — computed by the Graph Service
+- Pattern signals — computed by the Pattern Engine
+- Watch state — managed by the Watch Manager
+
+---
+
 ## Critical Files
 
 | File | Why it matters |
