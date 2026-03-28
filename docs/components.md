@@ -671,6 +671,104 @@ If a single watch has multiple `event_match` conditions and the event satisfies 
 
 ---
 
+## LLM Context Structure
+
+When the LLM Orchestrator pulls a `WatchMatch` from the run queue, the Prompt Builder assembles full context from three sources **in parallel** before calling the Mastra agent.
+
+### Context Assembly (parallel calls)
+
+| Source | Call | Content |
+|---|---|---|
+| Graph Service | `POST /graph/render-context` | Natural language rendering of business flow position, expected transitions, SLA status, tenant personal graph merged in |
+| OpenSearch | history query | Top-K similar past cases: recurrence count, escalation rate, prior outcomes |
+| Watch Manager | `GET /watches?entity_id=` | Other active watches for this entity (summaries only) |
+
+The `WatchMatch` itself (watch state + triggering event) comes from the run queue — no extra call needed.
+
+### Prompt Structure
+
+```
+[SYSTEM]
+You are Bpollo, an AI business copilot. Your role is to reason over
+business events and active watches, and decide what action to take.
+Always explain your reasoning before calling a tool.
+Be conservative: only escalate when evidence clearly supports it.
+
+[BUSINESS CONTEXT]
+=== Business Flow ===
+{Graph Service rendered context block — global graph + tenant personal graph merged}
+
+[TRIGGERED WATCH]
+Watch ID:  {watch_id}
+Created:   {created_at}
+Risk:      {risk_level}
+Reason:    "{reason}"
+History:   {N prior matches, summarized}
+
+=== What triggered this watch ===
+{if event_match}
+  Received: {event_type} at {timestamp}
+  Details:  {event payload key fields}
+
+{if absence}
+  Expected: {event_type} by {deadline}
+  Status:   NOT RECEIVED — overdue by {N} hours
+
+[EVIDENCE]
+=== Historical context ===
+{Top-5 OpenSearch results: similar past cases, recurrence count, escalation rate}
+
+=== Other active watches for this entity ===
+{Summarized list — watch reason + risk level only}
+
+[TASK]
+Based on the above, reason over the situation and call the appropriate tool.
+```
+
+### Agent Tools (output via tool-use)
+
+The agent **calls tools** to take action rather than returning a JSON blob. This allows multiple actions from a single reasoning call and keeps the reasoning natural.
+
+| Tool | Effect |
+|---|---|
+| `updateWatch(watch_id, { status, expires_at? })` | Resolve, escalate, extend, or expire the triggered watch |
+| `createWatch(WatchCreationRequest)` | Spawn a child watch for the next monitoring phase |
+| `dispatchAlert({ priority, message, recommendation })` | Send an alert to the user |
+| `standDown()` | No action needed — close this reasoning cycle |
+
+### Token Budget
+
+Context is capped to keep cost and latency predictable:
+
+| Section | Budget |
+|---|---|
+| Graph context block | ~500 tokens |
+| Watch context + trigger | ~300 tokens |
+| Historical evidence (top-5) | ~500 tokens |
+| Other active watches (summaries) | ~150 tokens |
+| **Total context** | **~1500 tokens** |
+
+Prompt templates live in `services/llm-orchestrator/prompts/` as Markdown files — versioned independently from code so prompt changes don't require a redeploy.
+
+### Audit Trail
+
+Every reasoning cycle is stored to Postgres before the agent acts:
+
+```
+{
+  watch_id,
+  trigger_type,
+  context_snapshot,     // what the agent saw
+  agent_reasoning,      // the explanation the agent gave before calling tools
+  tools_called,         // which tools were invoked and with what args
+  timestamp
+}
+```
+
+`agent_reasoning` is the answer to "why did the agent do this?" — captured from the agent's natural language explanation before each tool call. This closes the audit trail gap without any additional instrumentation.
+
+---
+
 ## Inter-Service Communication
 
 Services communicate via two patterns depending on the moment in the pipeline. All request/response types are defined in `packages/schemas` — shared across services, never duplicated.
