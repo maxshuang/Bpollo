@@ -596,6 +596,51 @@ node-cron ticks every N minutes
 **Terminal states:** `resolved`, `expired` — no further transitions.
 **Non-terminal states:** `waiting`, `triggered`, `running`, `escalated` (escalated always spawns a child).
 
+### Scheduler Design: Cron vs. Timeout Queue
+
+The scheduler that drives expiry and absence detection is implemented as a **periodic cron sweep** (default: every minute). This is the current MVP approach. A more scalable alternative is a **Redis sorted-set timeout queue**.
+
+#### Current approach — cron sweep
+
+```
+node-cron ticks every minute
+  → sweepExpired:  SELECT WHERE status='waiting' AND expires_at < now  → bulk UPDATE expired + Redis SREM
+  → sweepAbsence:  SELECT WHERE status='waiting'  → filter in JS for overdue required signals → UPDATE triggered + Kafka publish
+```
+
+| Property | Value |
+|---|---|
+| Implementation | `node-cron` + two Postgres queries per tick |
+| Expiry latency | Up to 1 minute after deadline |
+| Absence latency | Up to 1 minute after signal deadline |
+| DB load | Full scan of `waiting` watches every tick |
+| Operability | Simple — no extra infrastructure |
+
+Works well at low-to-medium watch counts. At scale, the absence sweep scans all `waiting` rows every minute regardless of how many are actually overdue.
+
+#### Future approach — Redis sorted-set timeout queue
+
+```
+On watch create/update:
+  ZADD watch:timeouts <deadline_unix_ms> <watch_id>
+
+Scheduler tick (or event-driven via WAIT):
+  ZRANGEBYSCORE watch:timeouts 0 <now_unix_ms>  → overdue watch_ids
+  → load from Postgres, process, ZREM
+```
+
+| Property | Value |
+|---|---|
+| Implementation | Redis `ZADD`/`ZRANGEBYSCORE` + targeted Postgres lookups |
+| Expiry latency | Near-zero (sub-second if using `WAIT` or tight polling) |
+| Absence latency | Near-zero |
+| DB load | Only loads watches that are actually overdue |
+| Operability | Requires Redis sorted-set bookkeeping on every watch create/update/delete |
+
+The sorted set gives O(log N) insertion and O(K) pop where K is the number of overdue watches — independent of total watch count. The tradeoff is that Redis becomes a dependency for correctness (not just performance), and the watch create/update paths must keep the sorted set in sync.
+
+**Decision:** Use cron sweep for MVP. Migrate to the Redis sorted-set approach when watch counts or latency requirements make the full-table scan untenable.
+
 ### Key Design Principle
 
 The watch carries the LLM's reasoning context from when it was created (`reason` + `graph_snapshot` + `history`). When it wakes, the agent gets the original context plus the new event — it continues reasoning from where it left off, not from scratch. This is what makes the proactive behavior feel intelligent rather than rule-based.
