@@ -1,5 +1,5 @@
 import { Hono } from "hono"
-import { eq, and } from "drizzle-orm"
+import { eq, and, desc } from "drizzle-orm"
 import { z } from "zod"
 import { WatchCreationRequestSchema } from "@bpollo/schemas"
 import type { TriggerCondition } from "@bpollo/schemas"
@@ -24,6 +24,42 @@ export function buildRouter() {
   const router = new Hono()
 
   router.get("/health", (c) => c.json({ status: "ok" }))
+
+  /**
+   * GET /watches/recent?limit=&status= — list most recent watches (for console)
+   */
+  router.get("/watches/recent", async (c) => {
+    const limit  = Math.min(Number(c.req.query("limit") ?? 50), 200)
+    const status = c.req.query("status")
+
+    const conditions = status ? [eq(watchObjects.status, status)] : []
+
+    const rows = await db
+      .select()
+      .from(watchObjects)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(watchObjects.createdAt))
+      .limit(limit)
+
+    return c.json({
+      watches: rows.map((r) => ({
+        watch_id:           r.watchId,
+        entity_id:          r.entityId,
+        tenant_id:          r.tenantId,
+        status:             r.status,
+        risk_level:         r.riskLevel,
+        scope:              r.scope,
+        reason:             r.reason,
+        trigger_conditions: r.triggerConditions,
+        expected_signals:   r.expectedSignals,
+        graph_snapshot:     r.graphSnapshot,
+        history:            r.history,
+        created_at:         r.createdAt.toISOString(),
+        expires_at:         r.expiresAt.toISOString(),
+        triggered_at:       r.triggeredAt?.toISOString() ?? null,
+      })),
+    })
+  })
 
   /**
    * POST /watches — create a new watch
