@@ -252,6 +252,73 @@ All domain schemas are combined into a single `BpolloEventSchema` discriminated 
 
 ---
 
+## Three-Layer Graph Model
+
+Bpollo uses three distinct graphs that operate at different timescales and compose together at reasoning time — analogous to how `CLAUDE.md` files work at different levels.
+
+```
+Global Business Graph   (always loaded — universal rules and flow)
+        +
+Personal Graph          (loaded per tenant — overrides and extensions)
+        +
+Watch Graph             (loaded per case — real-time dynamic context)
+        =
+Full context passed to LLM agent
+```
+
+### Global Business Graph
+The system-wide layer. Defines the universal business flow DAG, node semantics, edge SLAs, and violation descriptions. Applies to all tenants. Set by the system operator, LLM-assisted from user descriptions or documents, reviewed and committed as YAML.
+
+- **Format:** YAML in repo (`services/graph-service/graph-definition.yaml`)
+- **Changes:** Via PR — slow, deliberate
+- **Scope:** One global graph shared by all tenants
+
+### Personal Graph (Tenant-level)
+Layered on top of the global graph — like a project-level `CLAUDE.md`. Tenants don't redefine the whole flow; they override specific SLAs, add domain-specific context, and express what they care about. The `context` field is free-form natural language injected directly into the LLM prompt.
+
+```yaml
+# Example: acme-corp personal graph
+
+overrides:
+  edges:
+    - from: issue.flagged
+      to: action.created
+      sla_hours: 12
+      violation_description: "Acme requires corrective action within 12h per contract SLA."
+
+interests:
+  - entity_types: [site, inspection]
+    severity: [high, critical]
+    regions: [north-america]
+
+context: |
+  Acme Corp operates 200+ sites in North America. Safety issues are top priority.
+  Any critical finding must be escalated to the regional manager within the day.
+```
+
+- **Format:** Stored in Postgres per tenant, editable via UI or conversational setup with LLM
+- **Changes:** Tenant-managed, takes effect immediately
+- **Scope:** One personal graph per tenant
+
+### Watch Graph (Dynamic, per-case)
+Ephemeral graph created by the LLM Orchestrator when a case warrants real-time monitoring. Has a lifecycle (`active → resolved | escalated | expired`). Not defined by humans — generated and managed entirely by the agent.
+
+- **Format:** Structured schema in Postgres with TTL
+- **Changes:** Created and updated by the LLM agent in real time
+- **Scope:** One watch graph per monitored case
+
+### Composition at Reasoning Time
+
+When the LLM agent reasons over an event, the Prompt Builder assembles all three layers:
+
+1. **Global graph context** — rendered natural language description of the business flow and where the current event sits
+2. **Personal graph context** — tenant overrides merged in, free-form `context` block appended
+3. **Watch graph context** — active watches for this entity, with expected signals and deadlines
+
+The LLM never sees raw YAML or JSON — only the rendered, composed context block.
+
+---
+
 ## Graph Service Design
 
 The Graph Service is the source of truth for the business flow DAG. It serves two masters simultaneously: the system (programmatic traversal) and the LLM (natural language understanding of the flow).
