@@ -543,6 +543,134 @@ The watch carries the LLM's reasoning context from when it was created (`reason`
 
 ---
 
+## Event-Watch Matching Mechanism
+
+When an event arrives at the Watch Manager, it needs to efficiently answer: **which active watches does this event match?** Naively scanning all watches per event breaks at scale. Bpollo uses a two-stage approach: a fast index lookup followed by precise condition evaluation.
+
+### Two-Stage Matching
+
+```
+Event arrives at Watch Manager
+        │
+        ▼
+Stage 1: Index Lookup (Redis — O(1))
+  → key: watch:idx:{tenant_id}:{entity_id}:{event_type}
+  → returns: candidate watch_ids
+        │
+        ▼
+Stage 2: Condition Evaluation (Postgres — precise)
+  → load each candidate watch
+  → evaluate full trigger_conditions against event payload
+  → filter out false positives
+        │
+        ▼
+Confirmed matches → push to run queue
+```
+
+### Watch Index (Redis)
+
+When a watch is created, it is indexed in Redis by the events that can wake it:
+
+```
+watch:idx:{tenant_id}:{entity_id}:{event_type}  →  Set<watch_id>
+watch:idx:{tenant_id}:{entity_id}:*             →  Set<watch_id>  (any event for this entity)
+```
+
+On event arrival, the Watch Manager unions both keys to get candidates — constant time regardless of total watch count.
+
+On watch deletion/expiry, the watch_id is removed from all index keys it was registered under.
+
+### TriggerCondition Schema
+
+Each watch declares a list of conditions. A watch wakes when **any** condition matches:
+
+```typescript
+type TriggerCondition =
+  | {
+      type: "event_match"
+      event_type: string                      // must match exactly
+      filters?: Record<string, unknown>       // optional payload field checks
+      // e.g. { severity: "critical" } — only match if event.severity === "critical"
+    }
+  | {
+      type: "absence"
+      event_type: string                      // the event we expected but didn't arrive
+      deadline: string                        // ISO 8601 — handled by scheduler, not event matching
+    }
+  | {
+      type: "pattern"
+      pattern_name: string                    // named pattern check (e.g. "recurrence_3x_7d")
+      params?: Record<string, unknown>
+    }
+```
+
+`event_match` conditions are evaluated at event time. `absence` conditions are evaluated by the scheduler (timer interrupt). `pattern` conditions may trigger an async OpenSearch query.
+
+### Condition Evaluation (Stage 2)
+
+For each candidate watch loaded from Postgres:
+
+```
+for each trigger_condition of type "event_match":
+  1. event.event_type === condition.event_type?      → no: skip
+  2. all condition.filters match event payload?       → no: skip
+  3. watch.entity_id matches event.entity_id (or scope allows it)?  → no: skip
+  → match confirmed
+```
+
+### Match Scope
+
+Watches declare a `scope` that controls which entity's events can wake them:
+
+| Scope | Matches events from |
+|---|---|
+| `entity` | This exact `entity_id` only (default) |
+| `site` | Any entity belonging to the same `site_id` |
+| `tenant` | All events for the tenant |
+
+This allows a watch on an inspection to catch action events from any of its linked issues — without requiring the watch to enumerate every child entity.
+
+### Match Result
+
+A confirmed match produces a `WatchMatch` pushed onto the run queue:
+
+```typescript
+type WatchMatch = {
+  watch_id: string
+  trigger_type: "event_match" | "absence" | "pattern"
+  triggering_event?: BpolloEvent    // undefined for absence matches
+  matched_condition: TriggerCondition
+  watch_context: WatchObject        // full watch state at time of match
+}
+```
+
+The LLM Orchestrator receives this — it has everything needed to reason without making extra calls to the Watch Manager.
+
+### Absence Detection (Timer Path)
+
+The scheduler (node-cron) ticks every minute and scans Postgres for:
+
+```sql
+SELECT * FROM watches
+WHERE status = 'waiting'
+  AND EXISTS (
+    SELECT 1 FROM expected_signals
+    WHERE deadline < NOW()
+    AND received = false
+    AND required = true
+  )
+```
+
+Each result is woken with a synthetic absence event and pushed to the run queue — same path as event-driven matches.
+
+### Stacking
+
+An incoming event can match multiple watches simultaneously. Each match becomes an independent `WatchMatch` on the run queue. The LLM processes them independently — each with its own watch context.
+
+If a single watch has multiple `event_match` conditions and the event satisfies more than one, only the first matched condition is used to construct the `WatchMatch`. The LLM sees the full `trigger_conditions` list and can reason about the others.
+
+---
+
 ## Inter-Service Communication
 
 Services communicate via two patterns depending on the moment in the pipeline. All request/response types are defined in `packages/schemas` — shared across services, never duplicated.
