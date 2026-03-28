@@ -529,6 +529,73 @@ node-cron ticks every N minutes
 | `alert_only` | Surface a recommendation without changing watch state |
 | `expire` | Nothing happened within TTL — close quietly |
 
+### Watch State Machine
+
+```
+                    ┌─────────────────────────────────────────────────┐
+                    │                                                 │
+              created by                                        extend (LLM)
+           Trigger Engine /                                          │
+           LLM Orchestrator                                          │
+                    │                                                 │
+                    ▼                                                 │
+              ┌──────────┐   event_match fires      ┌─────────────┐  │
+              │          │ ─────────────────────────▶│             │  │
+              │ waiting  │                           │  triggered  │──┘
+              │          │ ─────────────────────────▶│             │
+              └──────────┘   absence deadline passed └──────┬──────┘
+                    │                                       │
+                    │ expires_at                            │ LLM Orchestrator
+                    │ passed                                │ picks up from
+                    │ (lazy,                                │ run queue
+                    │ on next                               ▼
+                    │ event)                         ┌─────────────┐
+                    │                                │             │
+                    │                                │   running   │
+                    │                                │             │
+                    │                                └──────┬──────┘
+                    │                                       │
+                    │              ┌────────────────────────┼──────────────────────┐
+                    │              │                        │                      │
+                    │           resolve                  escalate               expire
+                    │           (all signals             (situation             (nothing
+                    │           arrived or               worsened)              happened)
+                    │           risk gone)                  │                      │
+                    │              │                        │                      │
+                    ▼              ▼                        ▼                      ▼
+              ┌──────────┐  ┌──────────┐           ┌──────────────┐        ┌──────────┐
+              │          │  │          │           │              │        │          │
+              │ expired  │  │ resolved │           │  escalated   │        │ expired  │
+              │          │  │          │           │              │        │          │
+              └──────────┘  └──────────┘           └──────┬───────┘        └──────────┘
+                                                          │
+                                                   spawns new watch
+                                                   at higher risk level
+                                                          │
+                                                          ▼
+                                                    ┌──────────┐
+                                                    │ waiting  │ (child watch)
+                                                    └──────────┘
+```
+
+### State Transition Table
+
+| From | To | Trigger | Who |
+|---|---|---|---|
+| *(created)* | `waiting` | Watch created by Trigger Engine or LLM Orchestrator | Watch Manager |
+| `waiting` | `triggered` | Incoming event matches an `event_match` trigger condition | Watch Manager (Kafka consumer) |
+| `waiting` | `triggered` | An `absence` deadline passes with no signal received | Watch Manager (scheduler) |
+| `waiting` | `expired` | `expires_at` passed — checked lazily on next event or scheduler tick | Watch Manager |
+| `triggered` | `running` | LLM Orchestrator dequeues the watch from the run queue | LLM Orchestrator |
+| `running` | `resolved` | LLM decision: all expected signals arrived, or risk has passed | LLM Orchestrator → PATCH /watches/:id |
+| `running` | `escalated` | LLM decision: situation worsened — also spawns a higher-risk child watch | LLM Orchestrator → PATCH /watches/:id |
+| `running` | `waiting` | LLM decision: `extend` — deadline pushed, keep watching | LLM Orchestrator → PATCH /watches/:id |
+| `running` | `expired` | LLM decision: nothing meaningful happened within TTL | LLM Orchestrator → PATCH /watches/:id |
+| `escalated` | *(spawns)* | New child watch created at higher risk level, enters `waiting` | LLM Orchestrator → POST /watches |
+
+**Terminal states:** `resolved`, `expired` — no further transitions.
+**Non-terminal states:** `waiting`, `triggered`, `running`, `escalated` (escalated always spawns a child).
+
 ### Key Design Principle
 
 The watch carries the LLM's reasoning context from when it was created (`reason` + `graph_snapshot` + `history`). When it wakes, the agent gets the original context plus the new event — it continues reasoning from where it left off, not from scratch. This is what makes the proactive behavior feel intelligent rather than rule-based.
