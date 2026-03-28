@@ -20,8 +20,11 @@ flowchart TD
         ER[Event Router]
     end
 
-    subgraph Runtime[Core Runtime]
-        GS[Graph Service]
+    subgraph Foundation[Foundation Layer]
+        GS[Graph Service\nglobal graph + personal graph]
+    end
+
+    subgraph Runtime[Business Logic Layer]
         PE[Pattern Engine]
         WM[Watch Manager]
         RP[Rule / Policy Engine]
@@ -50,17 +53,20 @@ flowchart TD
     S4 --> EI
 
     EI --> ER
-    ER --> GS
     ER --> PE
     ER --> WM
     ER --> PG
     ER --> OS
 
-    GS -->|node mapping| PB
+    GS -->|graph context| PE
+    GS -->|expected signals| WM
+    GS -->|graph rules| RP
+    GS -->|rendered context block| PB
+
     PE -->|pattern summary| PB
     WM -->|active watches| PB
-    OS -->|historical evidence| PB
     RP -->|policy hints| PB
+    OS -->|historical evidence| PB
 
     PB --> AG
     AG -->|create / update watch| WM
@@ -89,16 +95,29 @@ flowchart TD
 
 ## Backend Services
 
+### Event Ingestion Layer
 | Component | Responsibility | Tech | MVP |
 |---|---|---|---|
 | Event Ingestion Service | Receives webhooks from upstream systems, validates, normalizes, deduplicates, publishes to event bus | TypeScript / Hono, Zod schemas, Redis (dedup) | Yes |
-| Event Router | Consumes normalized events, fans out to typed topics / downstream consumers | TypeScript Kafka consumer | Yes |
-| Business Flow Graph Service | Loads the business flow DAG from config, maps each event to its node position and expected transitions | TypeScript / Hono, graph-lib, YAML graph config | Yes |
-| Pattern / Insight Engine | Detects missing actions, recurrence, anomalies by querying event history | TypeScript / Hono, OpenSearch client | Yes (2–3 checks) |
+| Event Router | Consumes normalized events, fans out to typed Kafka topics for downstream consumers | TypeScript Kafka consumer | Yes |
+
+### Foundation Layer
+| Component | Responsibility | Tech | MVP |
+|---|---|---|---|
+| Graph Service | Foundational shared service — maintains the global business graph and personal graphs per tenant. Provides graph operations (locate node, get upstream/downstream, check SLA violations, render LLM context block) to all business logic services. **Not in the event processing pipeline — queried by other services as needed.** | TypeScript / Hono, graph-lib, YAML config | Yes |
+
+### Business Logic Layer
+| Component | Responsibility | Tech | MVP |
+|---|---|---|---|
+| Pattern / Insight Engine | Detects missing actions, recurrence, anomalies by querying event history. Calls Graph Service to understand expected transitions before analyzing. | TypeScript / Hono, OpenSearch client | Yes (2–3 checks) |
+| Active Watch Manager | Persists watches, runs time-based expiry checks, matches future events against active watches, triggers re-reasoning on match. Calls Graph Service to know what signals to watch for. | TypeScript / Hono, node-cron, Postgres, Redis | Yes |
+| Rule / Policy Engine | Deterministic rules evaluated before LLM to short-circuit clear-cut cases. Calls Graph Service for graph-based rule evaluation (e.g. "critical node with no downstream"). | TypeScript module, YAML-defined rules | Yes |
 | Watch Graph Generator | Builds `WatchObject` from LLM + policy output; co-located with Watch Manager | TypeScript module | Yes |
-| Active Watch Manager | Persists watches, runs time-based expiry checks, matches future events against active watches, triggers re-reasoning on match | TypeScript / Hono, node-cron, Postgres, Redis | Yes |
-| Rule / Policy Engine | Deterministic rules evaluated before LLM to short-circuit clear-cut cases and reduce noise | TypeScript module, YAML-defined rules | Yes |
-| LLM Orchestrator | Coordinates the reasoning pipeline: assembles context → calls LLM via Mastra → parses structured output → dispatches watch/alert | **Mastra agent** | Yes |
+
+### AI Layer
+| Component | Responsibility | Tech | MVP |
+|---|---|---|---|
+| LLM Orchestrator | Assembles full context (calls Graph Service for rendered context block + Pattern Engine + Watch Manager) → calls LLM via Mastra → parses structured output → dispatches watch/alert | **Mastra agent** | Yes |
 | Alert / Notification Service | Receives structured alerts, routes to Slack and in-app notifications | TypeScript / Hono, Slack SDK | Yes (Slack + in-app) |
 | Workflow Trigger Service | Creates tasks in external systems (Jira, Linear) from LLM recommendations | TypeScript / Hono, outbound webhooks | Deferred |
 
@@ -505,6 +524,121 @@ The watch carries the LLM's reasoning context from when it was created (`reason`
 - **Scheduler:** `node-cron` inside the Watch Manager service, tick interval configurable
 - **Concurrency:** Row-level locking in Postgres prevents duplicate processing of the same watch
 - **Scale risks (post-MVP):** High event throughput with many active watches needs index tuning; simultaneous triggers need priority scheduling in the run queue
+
+---
+
+## Inter-Service Communication
+
+Services communicate via two patterns depending on the moment in the pipeline. All request/response types are defined in `packages/schemas` — shared across services, never duplicated.
+
+| Moment | Pattern | Why |
+|---|---|---|
+| Event fan-out (ingestion → downstream) | Kafka async | Decoupled, replayable, independent consumers |
+| Business logic queries Graph Service | HTTP sync | Foundation layer queried on-demand by consumers |
+| LLM context assembly | Parallel HTTP sync | Need all inputs before LLM call |
+| Watch triggers → LLM Orchestrator | Kafka async | Prioritized queue, resilient to LLM latency |
+| LLM decisions → Watch Manager / Alert | HTTP sync | LLM needs confirmation before returning |
+
+### Kafka Topics
+
+| Topic | Producer | Consumer | Partition Key |
+|---|---|---|---|
+| `bpollo.events.raw` | Event Ingestion | Event Router | `entity_id` |
+| `bpollo.events.pattern` | Event Router | Pattern Engine | `entity_id` |
+| `bpollo.events.watch` | Event Router | Watch Manager | `entity_id` |
+| `bpollo.watches.triggered` | Watch Manager | LLM Orchestrator | `entity_id` |
+
+### Graph Service API
+Foundation layer — queried by Pattern Engine, Rule Engine, Watch Manager, and LLM Orchestrator.
+
+```
+POST /graph/locate
+  Body:  { event: BaseEvent }
+  Reply: { current_node, upstream, downstream_expected, sla_violations }
+
+POST /graph/render-context
+  Body:  { graph_location: GraphLocation, tenant_id: string }
+  Reply: { context_block: string }   // LLM-ready natural language
+
+GET  /graph/definition
+  Reply: full graph as JSON
+```
+
+### Pattern Engine API
+```
+POST /patterns/analyze
+  Body:  { event: BpolloEvent, graph_location: GraphLocation }
+  Reply: { should_flag: boolean, signals: PatternSignal[], pattern_type?: string }
+```
+
+### Watch Manager API
+```
+POST   /watches
+  Body:  { entity_id, tenant_id, reason, risk_level, trigger_conditions,
+           expected_signals, expires_at, graph_snapshot }
+  Reply: { watch_id, status }
+
+PATCH  /watches/:id
+  Body:  { status?, expected_signals?, expires_at? }
+  Reply: { watch_id, status }
+
+GET    /watches
+  Query: entity_id, tenant_id, status?
+  Reply: { watches: WatchObject[] }
+```
+
+### LLM Orchestrator API
+Called by the Event Router for Path 2 / Path 3 events (flagged or policy violation).
+
+```
+POST /reason
+  Body:  { event: BpolloEvent, graph_location: GraphLocation,
+           pattern_summary: PatternSummary, active_watches: WatchObject[] }
+  Reply: { decision: LLMDecision }
+```
+
+### Alert Service API
+```
+POST /alerts
+  Body:  { entity_id, tenant_id, watch_id?, priority, message, recommendation }
+  Reply: { alert_id }
+
+GET  /alerts
+  Query: tenant_id, user_id?, unread?
+  Reply: { alerts: Alert[] }
+```
+
+### External REST API (frontend-facing)
+```
+GET  /entities/:id/timeline
+  Reply: { events: BpolloEvent[], watches: WatchObject[], alerts: Alert[] }
+
+GET  /watches
+  Query: tenant_id, status?, risk_level?
+  Reply: { watches: WatchObject[] }
+
+POST /watches/:id/resolve
+  Reply: { watch_id, status }
+
+GET  /alerts
+  Query: tenant_id, unread?
+  Reply: { alerts: Alert[] }
+
+POST /copilot/query
+  Body:  { question: string, entity_id?: string }
+  Reply: { answer: string }   // streams from Mastra agent
+```
+
+### Shared Schema Types (`packages/schemas`)
+
+| Type | File | Used by |
+|---|---|---|
+| `BaseEvent`, `BpolloEvent` | `event.ts` | All services |
+| `GraphLocation`, `SLAViolation` | `graph.ts` | Graph Service, Pattern Engine, LLM Orchestrator |
+| `PatternSignal`, `PatternSummary` | `pattern.ts` | Pattern Engine, LLM Orchestrator |
+| `WatchObject`, `WatchTrigger`, `TriggerCondition`, `ExpectedSignal` | `watch.ts` | Watch Manager, LLM Orchestrator, Alert Service, API |
+| `LLMDecision` | `decision.ts` | LLM Orchestrator, Watch Manager |
+| `Alert` | `alert.ts` | Alert Service, API, Web UI |
 
 ---
 
