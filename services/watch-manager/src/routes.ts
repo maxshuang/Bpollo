@@ -19,8 +19,11 @@ const PatchSchema = z.object({
       "expired",
     ])
     .optional(),
+  risk_level: z.enum(["low", "medium", "high", "critical"]).optional(),
   expected_signals: z.array(z.unknown()).optional(),
   expires_at: z.string().datetime().optional(),
+  // Appended to the watch's history array — does not replace existing entries
+  history_entry: z.record(z.unknown()).optional(),
 });
 
 const GetQuerySchema = z.object({
@@ -151,10 +154,26 @@ export function buildRouter() {
       updatedAt: new Date(),
     };
     if (parsed.data.status) updates.status = parsed.data.status;
+    if (parsed.data.risk_level) updates.riskLevel = parsed.data.risk_level;
     if (parsed.data.expected_signals)
       updates.expectedSignals = parsed.data.expected_signals;
     if (parsed.data.expires_at)
       updates.expiresAt = new Date(parsed.data.expires_at);
+
+    // history_entry: append to the existing JSONB array rather than overwrite
+    if (parsed.data.history_entry) {
+      const [existing] = await db
+        .select({ history: watchObjects.history })
+        .from(watchObjects)
+        .where(eq(watchObjects.watchId, id));
+
+      if (!existing) return c.json({ error: "watch not found" }, 404);
+
+      updates.history = [
+        ...(existing.history as object[]),
+        { ...parsed.data.history_entry, at: new Date().toISOString() },
+      ];
+    }
 
     const [row] = await db
       .update(watchObjects)

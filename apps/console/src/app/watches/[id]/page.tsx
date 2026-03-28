@@ -1,7 +1,8 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
-import { WATCH_MANAGER_URL, GRAPH_SERVICE_URL } from "@/lib/config"
+import { WATCH_MANAGER_URL, GRAPH_SERVICE_URL, LLM_ORCHESTRATOR_URL } from "@/lib/config"
 import WatchGraph from "./WatchGraph"
+import ReasoningCycleCard from "./ReasoningCycleCard"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,6 +48,19 @@ interface BusinessNode {
   downstream: { node: string; label: string; sla_hours: number | null }[]
 }
 
+interface ReasoningCycle {
+  id:                  string
+  reasoning_cycle_id:  string
+  watch_id:            string
+  status:              string
+  agent_reasoning:     string | null
+  tools_called:        string[]
+  steps_used:          number | null
+  error_message:       string | null
+  started_at:          string
+  completed_at:        string | null
+}
+
 // ---------------------------------------------------------------------------
 // Data fetching
 // ---------------------------------------------------------------------------
@@ -65,6 +79,18 @@ async function fetchBusinessNodes(): Promise<BusinessNode[]> {
     if (!res.ok) return []
     const body = await res.json()
     return body.nodes ?? []
+  } catch { return [] }
+}
+
+async function fetchReasoningCycles(watchId: string): Promise<ReasoningCycle[]> {
+  try {
+    const res = await fetch(
+      `${LLM_ORCHESTRATOR_URL}/reasoning-cycles?watch_id=${watchId}`,
+      { cache: "no-store" },
+    )
+    if (!res.ok) return []
+    const body = await res.json()
+    return body.cycles ?? []
   } catch { return [] }
 }
 
@@ -99,9 +125,10 @@ function fmt(iso: string) {
 // ---------------------------------------------------------------------------
 
 export default async function WatchDetailPage({ params }: { params: { id: string } }) {
-  const [watch, businessNodes] = await Promise.all([
+  const [watch, businessNodes, reasoningCycles] = await Promise.all([
     fetchWatch(params.id),
     fetchBusinessNodes(),
+    fetchReasoningCycles(params.id),
   ])
 
   if (!watch) notFound()
@@ -241,6 +268,20 @@ export default async function WatchDetailPage({ params }: { params: { id: string
                     {h.event_type != null && <span className="ml-1 font-mono text-gray-500">{String(h.event_type)}</span>}
                     {h.occurred_at != null && <div className="text-gray-700">{fmt(String(h.occurred_at))}</div>}
                   </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Reasoning trail */}
+          {reasoningCycles.length > 0 && (
+            <div className="border border-indigo-900/50 bg-gray-900 rounded-xl p-4">
+              <h3 className="text-[10px] uppercase tracking-wider text-indigo-400/70 mb-3">
+                AI Reasoning ({reasoningCycles.length})
+              </h3>
+              <div className="space-y-3">
+                {reasoningCycles.map((cycle) => (
+                  <ReasoningCycleCard key={cycle.id} cycle={cycle} />
                 ))}
               </div>
             </div>

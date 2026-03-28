@@ -1,5 +1,9 @@
 import { eq, and, inArray } from "drizzle-orm";
-import type { BpolloEvent, TriggerCondition } from "@bpollo/schemas";
+import type {
+  BpolloEvent,
+  TriggerCondition,
+  WatchObject,
+} from "@bpollo/schemas";
 import { db } from "./db/client.js";
 import { watchObjects } from "./db/schema.js";
 import { lookupWatches, deindexWatch } from "./redis.js";
@@ -7,8 +11,12 @@ import { logger } from "./logger.js";
 
 export interface MatchResult {
   watchId: string;
+  entityId: string;
+  tenantId: string;
+  triggeredAt: Date;
   matchedCondition: TriggerCondition;
   triggerType: "event_match" | "absence" | "pattern";
+  watchSnapshot: WatchObject;
 }
 
 /**
@@ -111,8 +119,32 @@ export async function matchAndTrigger(
 
       results.push({
         watchId: row.watchId,
+        entityId: row.entityId,
+        tenantId: row.tenantId,
+        triggeredAt: now,
         matchedCondition: matched,
         triggerType: "event_match",
+        watchSnapshot: {
+          watch_id: row.watchId,
+          entity_id: row.entityId,
+          tenant_id: row.tenantId,
+          status: "triggered",
+          risk_level: row.riskLevel as WatchObject["risk_level"],
+          scope: (row.scope ?? "entity") as WatchObject["scope"],
+          reason: row.reason,
+          graph_snapshot: row.graphSnapshot as Record<string, unknown>,
+          trigger_conditions:
+            row.triggerConditions as WatchObject["trigger_conditions"],
+          expected_signals:
+            row.expectedSignals as WatchObject["expected_signals"],
+          created_at: row.createdAt.toISOString(),
+          expires_at: row.expiresAt.toISOString(),
+          triggered_at: now.toISOString(),
+          history: [
+            ...(row.history as object[]),
+            historyEntry,
+          ] as WatchObject["history"],
+        },
       });
 
       logger.info(

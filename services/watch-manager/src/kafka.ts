@@ -1,5 +1,5 @@
 import { Kafka } from "kafkajs";
-import { BpolloEventSchema } from "@bpollo/schemas";
+import { BpolloEventSchema, type WatchObject } from "@bpollo/schemas";
 import { config } from "./config.js";
 import { matchAndTrigger } from "./matcher.js";
 import { logger } from "./logger.js";
@@ -18,7 +18,10 @@ export async function startProducer(): Promise<void> {
 export async function publishTriggered(
   watchId: string,
   entityId: string,
+  tenantId: string,
   triggerType: "event_match" | "absence",
+  watchSnapshot: WatchObject,
+  triggeredAt: Date,
 ): Promise<void> {
   await producer.send({
     topic: config.kafkaTriggeredTopic,
@@ -27,8 +30,11 @@ export async function publishTriggered(
         key: entityId,
         value: JSON.stringify({
           watch_id: watchId,
-          trigger_type: triggerType,
           entity_id: entityId,
+          tenant_id: tenantId,
+          trigger_type: triggerType,
+          triggered_at: triggeredAt.toISOString(),
+          watch_snapshot: watchSnapshot,
         }),
       },
     ],
@@ -61,10 +67,18 @@ export async function startConsumer(): Promise<void> {
       }
 
       const matches = await matchAndTrigger(result.data);
-      if (matches.length > 0) {
+      for (const match of matches) {
+        await publishTriggered(
+          match.watchId,
+          match.entityId,
+          match.tenantId,
+          "event_match",
+          match.watchSnapshot,
+          match.triggeredAt,
+        );
         logger.info(
-          { count: matches.length, eventId: result.data.event_id },
-          "watches triggered",
+          { watchId: match.watchId, eventId: result.data.event_id },
+          "watch triggered — published to run queue",
         );
       }
     },

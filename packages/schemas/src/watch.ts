@@ -89,3 +89,17 @@ export const WatchMatchSchema = z.object({
 });
 
 export type WatchMatch = z.infer<typeof WatchMatchSchema>;
+
+// ---------------------------------------------------------------------------
+// WatchTrigger — published to bpollo.watches.triggered; consumed by LLM
+// ---------------------------------------------------------------------------
+export const WatchTriggerSchema = z.object({
+  watch_id: z.string().uuid(),
+  entity_id: z.string(),
+  tenant_id: z.string(),
+  trigger_type: z.enum(["event_match", "absence"]),
+  triggered_at: z.string().datetime(),
+  watch_snapshot: WatchObjectSchema,
+});
+
+export type WatchTrigger = z.infer<typeof WatchTriggerSchema>;

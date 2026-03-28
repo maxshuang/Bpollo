@@ -53,9 +53,11 @@ Bpollo is domain-agnostic: any business process expressible as a flow graph can 
 | `alert-service` | ✅ done | Alert storage and read/unread lifecycle |
 | `console` | ✅ done | Internal dashboard — business graph, personal graphs, watch inspector |
 | `trigger-engine` | ✅ done | Trigger interface + RuleTrigger + PatternTrigger → creates watches via Watch Manager |
-| `llm-orchestrator` | 🔧 planned | Mastra-based agent — assembles context, reasons, decides |
+| `llm-orchestrator` | ✅ done | Mastra-based agent — assembles context, reasons, decides |
 
 **174 tests** — unit, integration (real Docker containers), and E2E across the full event pipeline.
+
+> **Note:** `llm-orchestrator` requires an `ANTHROPIC_API_KEY` environment variable.
 
 ---
 
@@ -159,11 +161,23 @@ KAFKA_GRAPH_TOPIC=bpollo.events.graph \
 KAFKA_PATTERN_TOPIC=bpollo.events.pattern \
 KAFKA_WATCH_TOPIC=bpollo.events.watch \
 pnpm --filter @bpollo/event-router dev
+
+# LLM Orchestrator (port 3006)
+PORT=3006 \
+DATABASE_URL=postgres://bpollo:bpollo@localhost:5433/bpollo \
+KAFKA_BROKERS=localhost:9092 \
+KAFKA_TRIGGERED_TOPIC=bpollo.watches.triggered \
+GRAPH_SERVICE_URL=http://localhost:3002 \
+WATCH_MANAGER_URL=http://localhost:3004 \
+ALERT_SERVICE_URL=http://localhost:3005 \
+ANTHROPIC_API_KEY=your-key-here \
+pnpm --filter @bpollo/llm-orchestrator dev
 ```
 
 ### 4. Start the console
 
 ```bash
+LLM_ORCHESTRATOR_URL=http://localhost:3006 \
 pnpm --filter @bpollo/console dev
 ```
 
@@ -198,8 +212,8 @@ bpollo/
 │   ├── graph-service/       Business graph — entity state, SLA, LLM context
 │   ├── watch-manager/       Watch lifecycle — create, match, trigger
 │   ├── alert-service/       Alert storage and read/unread lifecycle
-│   ├── trigger-engine/      (planned) Pattern matching on event sequences
-│   └── llm-orchestrator/    (planned) Mastra agent — reason and decide
+│   ├── trigger-engine/      Pattern matching + rule evaluation → watch creation
+│   └── llm-orchestrator/    Mastra agent — reason over triggered watches, decide
 ├── packages/
 │   └── schemas/             Shared Zod schemas across all services
 ├── apps/

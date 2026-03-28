@@ -13,8 +13,11 @@ async function main() {
     logger.info({ port: config.port }, "trigger-engine listening");
   });
 
-  await startConsumer();
-  logger.info("kafka consumer started");
+  // Start Kafka consumer in the background — does not block HTTP startup
+  // so the service is healthy even if Kafka is temporarily unavailable.
+  startConsumer()
+    .then(() => logger.info("kafka consumer started"))
+    .catch((err) => logger.error({ err }, "kafka consumer failed to start"));
 
   const shutdown = async () => {
     logger.info("shutting down");

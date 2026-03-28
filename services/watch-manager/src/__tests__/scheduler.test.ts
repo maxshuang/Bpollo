@@ -56,8 +56,14 @@ const future = new Date(Date.now() + 60_000).toISOString();
 const baseWatch = {
   watchId: "watch-1",
   entityId: "entity-1",
+  tenantId: "tenant-1",
   status: "waiting",
+  riskLevel: "high",
+  scope: "entity",
+  reason: "Test watch",
+  graphSnapshot: { current_node: "action_overdue" },
   expiresAt: new Date(future),
+  createdAt: new Date(past),
   triggerConditions: [{ type: "event_match", event_type: "action.created" }],
   expectedSignals: [],
   history: [],
@@ -198,7 +204,10 @@ describe("sweepAbsence", () => {
     expect(publishTriggered).toHaveBeenCalledWith(
       "watch-1",
       "entity-1",
+      "tenant-1",
       "absence",
+      expect.objectContaining({ watch_id: "watch-1", entity_id: "entity-1" }),
+      expect.any(Date),
     );
   });
 
@@ -246,7 +255,10 @@ describe("sweepAbsence", () => {
     expect(publishTriggered).toHaveBeenCalledWith(
       "watch-1",
       "entity-1",
+      "tenant-1",
       "absence",
+      expect.objectContaining({ watch_id: "watch-1", entity_id: "entity-1" }),
+      expect.any(Date),
     );
   });
 });

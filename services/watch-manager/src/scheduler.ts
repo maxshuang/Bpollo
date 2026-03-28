@@ -1,6 +1,6 @@
 import cron, { type ScheduledTask } from "node-cron";
 import { lt, eq, and } from "drizzle-orm";
-import type { TriggerCondition } from "@bpollo/schemas";
+import type { TriggerCondition, WatchObject } from "@bpollo/schemas";
 import { db } from "./db/client.js";
 import { watchObjects } from "./db/schema.js";
 import { deindexWatch } from "./redis.js";
@@ -109,7 +109,35 @@ async function sweepAbsence(): Promise<void> {
       .map((c) => (c as { event_type: string }).event_type);
     await deindexWatch(row.watchId, eventTypes);
 
-    await publishTriggered(row.watchId, row.entityId, "absence");
+    const watchSnapshot: WatchObject = {
+      watch_id: row.watchId,
+      entity_id: row.entityId,
+      tenant_id: row.tenantId,
+      status: "triggered",
+      risk_level: row.riskLevel as WatchObject["risk_level"],
+      scope: (row.scope ?? "entity") as WatchObject["scope"],
+      reason: row.reason,
+      graph_snapshot: row.graphSnapshot as Record<string, unknown>,
+      trigger_conditions:
+        row.triggerConditions as WatchObject["trigger_conditions"],
+      expected_signals: row.expectedSignals as WatchObject["expected_signals"],
+      created_at: row.createdAt.toISOString(),
+      expires_at: row.expiresAt.toISOString(),
+      triggered_at: now.toISOString(),
+      history: [
+        ...(row.history as object[]),
+        historyEntry,
+      ] as WatchObject["history"],
+    };
+
+    await publishTriggered(
+      row.watchId,
+      row.entityId,
+      row.tenantId,
+      "absence",
+      watchSnapshot,
+      now,
+    );
 
     logger.info(
       { watchId: row.watchId, entityId: row.entityId },
