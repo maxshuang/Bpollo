@@ -238,8 +238,8 @@ export default async function WatchDetailPage({ params }: { params: { id: string
                 {watch.history.map((h, i) => (
                   <div key={i} className="text-[10px] text-gray-500 border-l-2 border-gray-700 pl-2">
                     <span className="text-gray-400">{String(h.type ?? "")}</span>
-                    {h.event_type && <span className="ml-1 font-mono text-gray-500">{String(h.event_type)}</span>}
-                    {h.occurred_at && <div className="text-gray-700">{fmt(String(h.occurred_at))}</div>}
+                    {h.event_type != null && <span className="ml-1 font-mono text-gray-500">{String(h.event_type)}</span>}
+                    {h.occurred_at != null && <div className="text-gray-700">{fmt(String(h.occurred_at))}</div>}
                   </div>
                 ))}
               </div>
