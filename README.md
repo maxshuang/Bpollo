@@ -11,34 +11,82 @@
 </p>
 
 <p align="center">
-  <strong>AI-Native Business Copilot</strong>
+  <strong>AI-Native Operational Intelligence System</strong>
 </p>
 
 <p align="center">
-  An event-driven business copilot — where an LLM reasoning agent is the orchestrator, not a plugin.
-</p>
-
-<p align="center">
-  <strong>⚠️ Active development — v0.1 in progress. Core pipeline is functional; LLM orchestration and trigger engine are not yet built.</strong>
+  An event-driven framework where an LLM reasoning agent orchestrates business monitoring,<br>
+  watch creation, and proactive alerting over structured business flow graphs.
 </p>
 
 ---
 
 ## What is Bpollo?
 
-Bpollo (inspired by Apollo) is a proactive business intelligence framework where **AI reasoning sits at the center of the system**, not at the edge. Instead of using an LLM to summarize outputs after the fact, Bpollo's agent actively orchestrates the entire decision pipeline: it reads the business flow, weighs historical evidence, decides what needs watching, and tells the rest of the system what to do.
-
-The result is a system that understands *why* something matters — not just *that* something happened.
-
-It models any business process as a flow graph — a sequence of states and expected transitions. For example:
+Bpollo models any business process as a **flow graph** — a sequence of states and expected transitions:
 
 ```
 inspection → issue / action → investigation → market → insurance
 ```
 
-When an event deviates from the expected flow, the AI agent reasons over the deviation, retrieves historical patterns, and decides whether to create a **dynamic watch** — a time-bounded monitor tracking whether expected follow-up events arrive. If they don't, Bpollo acts proactively.
+When real-world events deviate from expected flow, an AI agent reasons over the deviation — weighing business position, historical patterns, and active monitors — to decide whether the situation warrants ongoing attention. If it does, the agent creates a **dynamic watch**: a time-bounded commitment that tracks whether expected follow-up signals arrive. If they don't, Bpollo acts proactively.
+
+The result is a system that understands *why* something matters, not just *that* something happened.
 
 Bpollo is domain-agnostic: any business process expressible as a flow graph can be monitored this way.
+
+---
+
+## Why Not Rules Alone?
+
+Rule engines and anomaly detectors can tell you *what* happened. They can't tell you *what it means* given the current business context.
+
+Consider an inspection that flags a safety issue with no corrective action after 48 hours. A rule engine sees a timeout violation. Bpollo's agent sees something different:
+
+- This entity has had 3 similar issues in the past 90 days
+- Two of those escalated to investigations
+- There is already an active watch on a related issue at the same site
+- The graph position indicates the downstream risk is insurance exposure, not just a compliance flag
+
+A hard-coded rule produces an alert either way. The agent produces a *reasoned judgment* — calibrated to context, history, and risk — and decides whether to escalate, extend the watch, spawn a child watch, or stand down.
+
+The tradeoff is real: LLM orchestration adds latency and is non-deterministic. Bpollo addresses this by using rules and pattern detection as pre-filters — the agent is only invoked when something is worth reasoning about.
+
+---
+
+## End-to-End Example
+
+**Scenario:** An inspection is submitted with a high-risk flagged issue. Normally, a corrective action follows within 24 hours.
+
+1. **Event arrives** — `inspection.issue_flagged` hits the Event Ingestion service and is published to Kafka
+2. **Graph Service** maps the event to its position: `inspection → issue` node, downstream expected: `action`
+3. **Trigger Engine** evaluates rules — `action_overdue` rule fires at the 24-hour mark with no matching action event
+4. **Watch Manager** publishes a `WatchTrigger` to Kafka
+5. **LLM Orchestrator** wakes up and assembles context:
+   - Graph position: issue at a high-risk node, SLA window closing
+   - Pattern signals: this issue type has a 90% historical action rate; this site has had 2 prior escalations
+   - Active watches: one existing watch on a related issue at the same site
+6. **Agent reasons** — decides the combined risk warrants escalation; calls `escalateWatch` to raise risk level and `dispatchAlert` to notify the user
+7. **Alert Service** stores the alert; delivery plugins push it to Slack and the console chat UI
+8. **User receives** a proactive message: *"High-risk issue at Site 9 has no corrective action after 48 hours. Historical patterns link this type to investigation escalation. Recommend creating an action immediately."*
+
+No human had to check a dashboard. The system came to them.
+
+---
+
+## Architecture
+
+Five components, each with a distinct role in the system:
+
+| Component | Role |
+|---|---|
+| **Graph Service** | State understanding — maps events to positions in the business flow graph, surfaces SLA violations and downstream expectations |
+| **Trigger Engine** | Signal generation — evaluates rule-based and pattern-based conditions; fires when something is worth reasoning about |
+| **LLM Orchestrator** | Contextual reasoning — assembles graph position, patterns, and watch history; agent decides and acts |
+| **Watch Manager** | Temporal commitment tracking — holds open questions about the future ("did action X arrive within deadline Y?"); triggers on absence as well as presence |
+| **Alert Service** | User-facing intervention — stores alerts and delivers them proactively via registered channels |
+
+See [System Design](docs/design.md) for the full layer architecture and component diagram.
 
 ---
 
@@ -46,46 +94,25 @@ Bpollo is domain-agnostic: any business process expressible as a flow graph can 
 
 | Service | Status | Description |
 |---|---|---|
-| `event-ingestion` | ✅ done | Webhook receiver — validates, deduplicates, publishes to Kafka |
-| `event-router` | ✅ done | Fans out raw events to graph / pattern / watch topics |
-| `graph-service` | ✅ done | Tracks entity positions in the business graph, SLA violations, LLM context |
-| `watch-manager` | ✅ done | CRUD for watches, Redis event index, Kafka-driven triggering |
-| `alert-service` | ✅ done | Alert storage and read/unread lifecycle |
-| `console` | ✅ done | Internal dashboard — business graph, personal graphs, watch inspector |
-| `trigger-engine` | ✅ done | Trigger interface + RuleTrigger + PatternTrigger → creates watches via Watch Manager |
-| `llm-orchestrator` | ✅ done | Mastra-based agent — assembles context, reasons, decides |
+| `event-ingestion` | ✅ | Webhook receiver — validates, deduplicates, publishes to Kafka |
+| `event-router` | ✅ | Fans out raw events to graph / pattern / watch topics |
+| `graph-service` | ✅ | Entity positions in the business graph, SLA violations, LLM context rendering |
+| `watch-manager` | ✅ | Watch lifecycle — create, match, trigger; Redis event index; scheduler for absence detection |
+| `alert-service` | ✅ | Alert storage and read/unread lifecycle |
+| `trigger-engine` | ✅ | RuleTrigger + PatternTrigger → creates watches via Watch Manager |
+| `llm-orchestrator` | ✅ | Mastra-based agent (claude-opus-4-6) — assembles context, reasons, decides, audits every cycle |
+| `console` | ✅ | Internal dashboard — business graph, watch inspector, AI reasoning trail |
 
 **174 tests** — unit, integration (real Docker containers), and E2E across the full event pipeline.
 
-> **Note:** `llm-orchestrator` requires an `ANTHROPIC_API_KEY` environment variable.
-
----
-
-## AI as the Orchestrator
-
-Most systems treat AI as a post-processing step — events are analyzed by rules, then an LLM adds a summary. Bpollo inverts this.
-
-The **LLM reasoning agent is the orchestrator**. Every non-trivial decision flows through it:
-
-- Should this event be monitored? The agent decides.
-- What follow-up signals matter? The agent defines them.
-- Has the situation escalated? The agent reassesses.
-- What should the user do next? The agent recommends.
-
-The agent reasons over structured inputs assembled by the system:
-
-| Input | Source |
-|---|---|
-| Current event and its position in the business flow graph | Graph Service |
-| Detected anomalies and pattern signals | Trigger Engine |
-| Existing active watches for this entity | Watch Manager |
+> `llm-orchestrator` requires an `ANTHROPIC_API_KEY` environment variable.
 
 ---
 
 ## How It Works
 
 1. A business event arrives and is mapped to its position in the flow graph
-2. The pattern engine detects anomalies and signals
+2. Rule and pattern engines evaluate whether the event warrants attention
 3. **The AI agent reasons over all inputs** — business position, patterns, active watches
 4. The agent decides: monitor this case, or surface a direct recommendation
 5. If monitoring: a **watch object** is created with expected signals, deadlines, and risk level
@@ -181,7 +208,7 @@ LLM_ORCHESTRATOR_URL=http://localhost:3006 \
 pnpm --filter @bpollo/console dev
 ```
 
-Open **http://localhost:3100** — the console shows the business graph, personal graphs, and active watches.
+Open **http://localhost:3100** — the console shows the business graph, active watches, and the AI reasoning trail for each triggered watch.
 
 ---
 
@@ -210,7 +237,7 @@ bpollo/
 │   ├── event-ingestion/     Webhook ingest — validate, deduplicate, publish
 │   ├── event-router/        Fan-out raw events to downstream Kafka topics
 │   ├── graph-service/       Business graph — entity state, SLA, LLM context
-│   ├── watch-manager/       Watch lifecycle — create, match, trigger
+│   ├── watch-manager/       Watch lifecycle — create, match, trigger, schedule
 │   ├── alert-service/       Alert storage and read/unread lifecycle
 │   ├── trigger-engine/      Pattern matching + rule evaluation → watch creation
 │   └── llm-orchestrator/    Mastra agent — reason over triggered watches, decide
@@ -232,3 +259,4 @@ bpollo/
 - [System Design](docs/design.md)
 - [Component Breakdown](docs/components.md)
 - [Repo Structure](docs/repo-structure.md)
+- [Usability Analysis](docs/usability.md)
