@@ -456,6 +456,50 @@ Final output surfaced to the user.
 
 ---
 
-## 7. Next Steps
+## 7. Layer Architecture
+
+Bpollo is an AI-native business copilot. The true core of the system is the **Agent + Graph** — the reasoning brain grounded in business topology. Everything else exists to feed it signals, arm it with capabilities, and deliver its decisions.
+
+```
+  PLUGIN IN                        INTERNAL SYSTEM                          PLUGIN OUT
+  (Event Sources)                                                           (Delivery)
+
+  SAP ─────────┐    ┌──────────────────────────────────────────────────┐
+  Salesforce ──┼──→ │  ┌───────────┐   ┌────────────┐  ┌───────────┐  │ →── Slack
+  IoT/Webhooks ┘    │  │  Event    │   │  Rules     │  │           │  │ →── Email
+                    │  │  Layer    │──→│  Patterns  │─→│   AGENT   │  │
+  Graph Def ──────→ │  │  normalize│   │  Watch Eng.│  │ LLM·Tools │  │ →── Chat UI
+  Rule Packs ─────→ │  └───────────┘   └────────────┘  │ ╔═══════╗ │  │ →── Console
+                    │                                   │ ║ Graph ║ │  │
+  (Tool Plugins)    │                                   │ ╚═══════╝ │  │ →── Webhook
+  ERP Tools ──────→ │ · · · · · · · · · · · · · · · · →│           │  │
+  CRM Tools ──────→ │                                   └───────────┘  │
+  Doc Tools ──────→ └──────────────────────────────────────────────────┘
+```
+
+### Three zones inside the system
+
+| Zone | Components | Role |
+|---|---|---|
+| Event Layer (left) | Normalizer · Router | Receives and standardizes all inbound events |
+| Pipeline (middle) | Rules Engine · Pattern Engine · Watch Manager | Pre-filters noise; produces signals worth reasoning over |
+| Agent + Graph (right) | LLM · Tool Registry · Graph Layer | The reasoning brain; graph provides business constraint; tools provide reach |
+
+### Two plugin seams on the left
+
+- **Event source plugins** — connect third-party systems (SAP, Salesforce, IoT, webhooks) to the Event Layer. Each plugin declares the event types it emits and a normalizer adapter.
+- **Tool plugins** — register domain-specific capabilities directly into the Agent's tool registry (ERP tools, CRM tools, document tools). The agent calls these mid-reasoning to access real business data. These bypass the pipeline entirely — they are capabilities, not signals.
+
+### Plugin seam on the right
+
+- **Delivery plugins** — receive the agent's output and push it to users via Slack, email, proactive chat UI, console, or custom webhooks. Each plugin implements the same delivery interface; the framework fans out to all registered channels for the tenant.
+
+### Why Agent + Graph is the core
+
+The pipeline (rules, patterns, watch engine) is infrastructure — it filters and routes. The Graph is the knowledge structure that tells the agent *where* in a business process an entity sits and *what relationships matter*. Together, Agent + Graph is what makes this AI-native: the LLM doesn't reason in a vacuum, it reasons within the constraints of a real business model. Every other component exists to serve this.
+
+---
+
+## 8. Next Steps
 
 A natural next phase would be a detailed **component diagram + table / schema design** for the engineering implementation.
