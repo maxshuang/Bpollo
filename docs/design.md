@@ -2,11 +2,98 @@
 
 ## Overview
 
-> **An event-driven business copilot that maps real-time events onto a business flow graph, detects abnormal patterns, creates dynamic watch graphs for important cases, and proactively follows up on future signals.**
+> **An AI-native business copilot that maps real-time events onto a business graph, detects anomalies, creates dynamic watches for important cases, and proactively reasons over future signals.**
 
 ---
 
-## 1. System Architecture
+## 1. Layer Architecture
+
+Bpollo is built as a general framework. The **Agent + Graph** is the true core — the reasoning brain grounded in business topology. Everything else exists to feed it signals, arm it with capabilities, and deliver its decisions.
+
+```mermaid
+flowchart LR
+    subgraph LEFT["Plugin In"]
+        direction TB
+        subgraph SRC["Event Sources"]
+            S1([SAP])
+            S2([Salesforce])
+            S3([IoT · Webhooks])
+        end
+        subgraph DEF["Definitions"]
+            D1([Graph Definition])
+            D2([Rule Packs])
+        end
+        subgraph TPLUG["Tool Plugins"]
+            T1([ERP Tools])
+            T2([CRM Tools])
+            T3([Doc Tools])
+        end
+    end
+
+    subgraph SYS["Internal System"]
+        direction LR
+        subgraph EL["Event Layer"]
+            E1[Normalizer]
+            E2[Router]
+            E1 --> E2
+        end
+        subgraph PIPE["Pipeline"]
+            P1[Rules Engine]
+            P2[Pattern Engine]
+            P3[Watch Manager]
+        end
+        subgraph CORE["Agent + Graph"]
+            AG[LLM · Tool Registry]
+            GR[(Graph Layer)]
+            AG --- GR
+        end
+        EL --> PIPE
+        PIPE --> CORE
+    end
+
+    subgraph RIGHT["Plugin Out"]
+        direction TB
+        R1([Slack])
+        R2([Email])
+        R3([Chat UI])
+        R4([Console])
+        R5([Webhook])
+    end
+
+    S1 & S2 & S3 --> E1
+    D1 --> E1
+    D2 --> PIPE
+    T1 & T2 & T3 --> CORE
+
+    CORE --> R1 & R2 & R3 & R4 & R5
+```
+
+### Three zones inside the system
+
+| Zone | Components | Role |
+|---|---|---|
+| Event Layer | Normalizer · Router | Receives and standardizes all inbound events from any source |
+| Pipeline | Rules Engine · Pattern Engine · Watch Manager | Pre-filters noise; produces signals worth reasoning over |
+| Agent + Graph | LLM · Tool Registry · Graph Layer | The reasoning brain; graph provides business constraint; tools provide reach |
+
+### Plugin seams
+
+**Plugin In — two categories:**
+- **Event source plugins** — connect third-party systems to the Event Layer. Each plugin adapts external events into the internal `BpolloEvent` format and declares the event types it emits.
+- **Tool plugins** — register domain-specific capabilities directly into the Agent's tool registry. The agent calls these mid-reasoning to access real business data (orders, supplier history, documents). Tool plugins bypass the pipeline entirely — they are capabilities, not signals.
+
+**Plugin Out:**
+- **Delivery plugins** — receive the agent's output and push to users via Slack, email, proactive chat UI, console, or custom webhooks. The framework fans out to all registered channels for the tenant.
+
+### Why Agent + Graph is the core
+
+The pipeline (rules, patterns, watch engine) is infrastructure — it filters and routes. The Graph is the knowledge structure that tells the agent *where* in a business process an entity sits and *what relationships matter*. Together, Agent + Graph makes this AI-native: the LLM doesn't reason in a vacuum, it reasons within the constraints of a real business model.
+
+---
+
+## 2. System Components
+
+Detailed view of all components and their connections.
 
 ```mermaid
 flowchart LR
@@ -25,7 +112,7 @@ flowchart LR
         B3[Event Router]
     end
 
-    subgraph C[Core Runtime]
+    subgraph C[Pipeline]
         C1[Business Flow Graph Service]
         C2[Pattern / Insight Engine]
         C3[Watch Graph Generator]
@@ -33,33 +120,26 @@ flowchart LR
         C5[Rule / Policy Engine]
     end
 
-    subgraph D[Context & Retrieval Layer]
+    subgraph D[Context & Retrieval]
         D1[OpenSearch / Event History]
         D2[Operational DB]
         D3[Graph / Relationship Store]
     end
 
-    subgraph E[Reasoning Layer]
+    subgraph E[Agent + Graph]
         E1[LLM Reasoning Agent]
         E2[Prompt Builder / Context Assembler]
     end
 
-    subgraph F[Action Layer]
-        F1[Recommendation Engine]
-        F2[Alert / Notification Service]
-        F3[Workflow Trigger / Task Creator]
-        F4[UI Copilot / Timeline View]
+    subgraph F[Delivery Layer]
+        F1[Alert / Notification Service]
+        F2[Proactive Chat UI]
+        F3[Workflow Trigger]
+        F4[Console / Timeline View]
     end
 
-    A1 --> B1
-    A2 --> B1
-    A3 --> B1
-    A4 --> B1
-    A5 --> B1
-    A6 --> B1
-
-    B1 --> B2
-    B2 --> B3
+    A1 & A2 & A3 & A4 & A5 & A6 --> B1
+    B1 --> B2 --> B3
 
     B3 --> C1
     B3 --> C2
@@ -72,165 +152,24 @@ flowchart LR
     C3 --> C4
     C4 --> E2
     C5 --> C3
+    C2 --> C3
+    C1 --> C3
 
     D1 --> E2
+    D1 --> C2
     D2 --> E2
+    D2 --> C1
     D3 --> E2
 
     E2 --> E1
-    E1 --> F1
-    E1 --> F2
-    E1 --> F3
-    E1 --> F4
-
-    C2 --> C3
-    C1 --> C3
-    D1 --> C2
-    D2 --> C1
+    E1 --> F1 & F2 & F3 & F4
 ```
-
----
-
-## 2. Layer Breakdown
-
-The system is organized into 6 layers.
-
-### A. Business Systems / Event Sources
-
-Real-world business event origins:
-
-- Inspection submissions
-- Issue creation
-- Action creation / overdue
-- Investigation opened
-- Market signals
-- Insurance claims
-
-These systems do not require AI — they simply produce a continuous stream of business facts.
-
-### B. Event Ingestion Layer
-
-Receives and normalizes raw business events:
-
-- **Event Bus / Stream** — collects real-time or near-real-time events
-- **Event Normalizer** — standardizes event format
-- **Event Router** — dispatches events to downstream modules
-
-This is the entry point of the runtime.
-
-### C. Core Runtime
-
-The most critical layer.
-
-#### 1) Business Flow Graph Service
-
-Maintains the primary business flow graph:
-
-```
-inspection → issue / action → investigation → market → insurance
-```
-
-Responsibilities:
-- Locate where a given event sits within the business flow
-- Define upstream / downstream relationships
-- Identify normal paths vs. abnormal paths
-
-#### 2) Pattern / Insight Engine
-
-Detects patterns such as:
-
-- Repeated issues
-- Missing expected actions
-- Anomalies
-- Escalating risk
-
-#### 3) Watch Graph Generator
-
-The key innovation of this system. When an event warrants ongoing attention, this component dynamically generates a temporary watch graph, e.g.:
-
-- Was an action created within 24h?
-- Did the issue recur within 7 days?
-- Did it escalate to an investigation?
-
-#### 4) Active Watch Manager
-
-Manages all cases currently under monitoring:
-
-- `active`
-- `resolved`
-- `escalated`
-- `expired`
-
-#### 5) Rule / Policy Engine
-
-Encodes deterministic rules, e.g.:
-
-- A flagged issue should normally have a corresponding action
-- An overdue action after X hours triggers escalation
-- Severe issue types require stronger monitoring windows
-
-### D. Context & Retrieval Layer
-
-Provides evidence to support reasoning.
-
-#### OpenSearch / Event History
-
-Queries historical events, similar patterns, and time-window aggregations:
-
-- How many times has this type of issue occurred in the past 90 days?
-- Has it ever escalated to a major incident?
-- Is this site a repeat offender?
-
-#### Operational DB
-
-Stores structured state: watch objects, current case data.
-
-#### Graph / Relationship Store
-
-For later complexity, stores:
-
-- Issue-to-action relationships
-- Site-to-incident relationships
-- Dependencies between business nodes
-
-This layer can be simplified for MVP.
-
-### E. Reasoning Layer
-
-The LLM is not responsible for managing the whole system. Its role is to:
-
-- Traverse the business flow graph to understand the current event
-- Combine historical evidence to assess risk
-- Decide whether a watch is needed
-- Explain why an alert should be raised
-- Recommend next steps
-
-The **Prompt Builder / Context Assembler** is critical — it packages:
-
-- The current event
-- Its position in the business flow
-- Active watches
-- Retrieved historical evidence
-- Pattern summaries
-
-...into a context the LLM can reason over.
-
-### F. Action Layer
-
-Final output to users or downstream systems:
-
-- Recommendations
-- Alerts
-- Workflow triggers
-- UI timeline / copilot view
-
-This is the layer where proactive interaction becomes visible to users.
 
 ---
 
 ## 3. Data Flow
 
-This diagram shows what happens when an event enters the system and how the system decides whether to monitor the future.
+What happens when an event enters the system and how the system decides whether to monitor the future.
 
 ```mermaid
 sequenceDiagram
@@ -242,8 +181,8 @@ sequenceDiagram
     participant R as Retrieval Layer
     participant W as Watch Manager
     participant L as LLM Agent
-    participant A as Action Layer
-    participant U as User / UI
+    participant A as Delivery Layer
+    participant U as User
 
     S->>I: Emit event (e.g. flagged issue in inspection)
     I->>B: Map event to business node/path
@@ -259,14 +198,14 @@ sequenceDiagram
     L->>L: Decide if future monitoring is needed
 
     alt Needs watch
-        L->>W: Create / update dynamic watch graph
+        L->>W: Create / update dynamic watch
         W-->>A: Register expected future events
     else No watch needed
         L-->>A: Generate lightweight suggestion only
     end
 
     L->>A: Output recommendation / alert / next best action
-    A->>U: Show proactive reminder or recommendation
+    A->>U: Proactive alert via Slack / email / chat UI
 
     Note over W,I: Future incoming events are matched against active watches
 
@@ -325,7 +264,7 @@ Output:
 - Create a temporary watch
 - Watch for: action creation, repeated issue, investigation opened
 
-### Step 6: Dynamic Watch Graph is created
+### Step 6: Dynamic Watch is created
 
 ```json
 {
@@ -351,35 +290,7 @@ This is what enables truly proactive interaction:
 
 ---
 
-## 5. MVP Architecture (Simplified)
-
-```mermaid
-flowchart TD
-    A[Business Event<br/>flagged issue / missing action] --> B[Event Ingestion]
-
-    B --> C[Business Flow Mapper]
-    B --> D[Pattern Checker]
-    B --> E[History Retrieval]
-
-    C --> F[LLM Agent]
-    D --> F
-    E --> F
-
-    F --> G{Need Dynamic Watch?}
-
-    G -- Yes --> H[Create / Update Watch Object]
-    G -- No --> I[Direct Recommendation]
-
-    H --> J[Watch Event Matcher]
-    J --> K[Proactive Alert / Follow-up]
-
-    I --> L[UI Suggestion]
-    K --> L
-```
-
----
-
-## 6. Core Data Objects (MVP)
+## 5. Core Data Objects
 
 ### Event
 
@@ -442,64 +353,21 @@ A dynamically created monitoring target.
 }
 ```
 
-### Recommendation / Alert
+### Alert
 
 Final output surfaced to the user.
 
 ```json
 {
   "watch_id": "watch_001",
-  "message": "This flagged issue is missing an expected action and has historical links to severe incidents. Recommend creating a corrective action within 24 hours.",
-  "priority": "high"
+  "priority": "high",
+  "message": "Flagged issue is missing an expected action and has historical links to severe incidents.",
+  "recommendation": "Create a corrective action within 24 hours."
 }
 ```
 
 ---
 
-## 7. Layer Architecture
+## 6. Next Steps
 
-Bpollo is an AI-native business copilot. The true core of the system is the **Agent + Graph** — the reasoning brain grounded in business topology. Everything else exists to feed it signals, arm it with capabilities, and deliver its decisions.
-
-```
-  PLUGIN IN                        INTERNAL SYSTEM                          PLUGIN OUT
-  (Event Sources)                                                           (Delivery)
-
-  SAP ─────────┐    ┌──────────────────────────────────────────────────┐
-  Salesforce ──┼──→ │  ┌───────────┐   ┌────────────┐  ┌───────────┐  │ →── Slack
-  IoT/Webhooks ┘    │  │  Event    │   │  Rules     │  │           │  │ →── Email
-                    │  │  Layer    │──→│  Patterns  │─→│   AGENT   │  │
-  Graph Def ──────→ │  │  normalize│   │  Watch Eng.│  │ LLM·Tools │  │ →── Chat UI
-  Rule Packs ─────→ │  └───────────┘   └────────────┘  │ ╔═══════╗ │  │ →── Console
-                    │                                   │ ║ Graph ║ │  │
-  (Tool Plugins)    │                                   │ ╚═══════╝ │  │ →── Webhook
-  ERP Tools ──────→ │ · · · · · · · · · · · · · · · · →│           │  │
-  CRM Tools ──────→ │                                   └───────────┘  │
-  Doc Tools ──────→ └──────────────────────────────────────────────────┘
-```
-
-### Three zones inside the system
-
-| Zone | Components | Role |
-|---|---|---|
-| Event Layer (left) | Normalizer · Router | Receives and standardizes all inbound events |
-| Pipeline (middle) | Rules Engine · Pattern Engine · Watch Manager | Pre-filters noise; produces signals worth reasoning over |
-| Agent + Graph (right) | LLM · Tool Registry · Graph Layer | The reasoning brain; graph provides business constraint; tools provide reach |
-
-### Two plugin seams on the left
-
-- **Event source plugins** — connect third-party systems (SAP, Salesforce, IoT, webhooks) to the Event Layer. Each plugin declares the event types it emits and a normalizer adapter.
-- **Tool plugins** — register domain-specific capabilities directly into the Agent's tool registry (ERP tools, CRM tools, document tools). The agent calls these mid-reasoning to access real business data. These bypass the pipeline entirely — they are capabilities, not signals.
-
-### Plugin seam on the right
-
-- **Delivery plugins** — receive the agent's output and push it to users via Slack, email, proactive chat UI, console, or custom webhooks. Each plugin implements the same delivery interface; the framework fans out to all registered channels for the tenant.
-
-### Why Agent + Graph is the core
-
-The pipeline (rules, patterns, watch engine) is infrastructure — it filters and routes. The Graph is the knowledge structure that tells the agent *where* in a business process an entity sits and *what relationships matter*. Together, Agent + Graph is what makes this AI-native: the LLM doesn't reason in a vacuum, it reasons within the constraints of a real business model. Every other component exists to serve this.
-
----
-
-## 8. Next Steps
-
-A natural next phase would be a detailed **component diagram + table / schema design** for the engineering implementation.
+A natural next phase would be a detailed **component diagram + schema design** for the engineering implementation.
